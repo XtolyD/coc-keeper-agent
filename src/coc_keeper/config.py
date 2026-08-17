@@ -53,6 +53,10 @@ class Settings:
     max_tokens: int = 2048
     temperature: float = 0.7
     history_limit: int = 40     # 保留最近消息条数
+    max_input_chars: int = 4000
+    max_total_tokens: int = 32000
+    request_timeout: float = 60.0
+    max_retries: int = 2
 
     @property
     def is_configured(self) -> bool:

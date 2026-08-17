@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import fitz  # pymupdf
+import pymupdf
 
 # 统一 UTF-8 输出，避免 Windows 控制台 GBK 编码问题
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -23,7 +23,7 @@ OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "rulebook"
 def open_doc():
     if not PDF_PATH.exists():
         sys.exit(f"规则书不存在: {PDF_PATH}")
-    return fitz.open(str(PDF_PATH))
+    return pymupdf.open(str(PDF_PATH))
 
 
 def print_toc():

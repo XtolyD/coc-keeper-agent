@@ -35,6 +35,11 @@ class Attributes:
     EDU: int = 50
     LUCK: int = 50
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Attributes":
+        values = {name: int(data.get(name, 50)) for name in ("STR", "CON", "DEX", "APP", "POW", "SIZ", "INT", "EDU", "LUCK")}
+        return cls(**values)
+
 
 def damage_bonus_and_build(str_plus_siz: int) -> tuple[str, int]:
     """表Ⅰ：伤害加值和体格表。返回 (伤害加值表达式, 体格)。"""
@@ -177,6 +182,29 @@ class CharacterSheet:
             },
             "skills": dict(self.skills),
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CharacterSheet":
+        """从 ``to_dict`` 输出恢复角色卡，忽略派生字段以避免重复来源。"""
+        attrs = Attributes.from_dict(data.get("attributes", {}))
+        current = data.get("current", {})
+        derived = data.get("derived", {})
+
+        def current_value(name: str, fallback: int | None = None) -> int | None:
+            value = current.get(name.lower())
+            if value is not None:
+                return int(value)
+            raw = derived.get(name)
+            if isinstance(raw, str) and "/" in raw:
+                return int(raw.split("/", 1)[0])
+            return fallback
+
+        return cls(
+            name=str(data.get("name", "调查员")), age=int(data.get("age", 30)),
+            attributes=attrs, skills={k: int(v) for k, v in data.get("skills", {}).items()},
+            hp=current_value("HP"), mp=current_value("MP"), san=current_value("SAN"),
+            luck=int(data.get("luck", data.get("attributes", {}).get("LUCK", attrs.LUCK))),
+        )
 
 
 def roll_attributes(rng: Optional[random.Random] = None) -> Attributes:

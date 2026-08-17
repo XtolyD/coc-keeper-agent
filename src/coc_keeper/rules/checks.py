@@ -164,7 +164,7 @@ def sanity_check(
         loss = max(0, roll_dice(loss_success, rng))
     else:
         loss = max(0, roll_dice(loss_failure, rng))
-    return SanityResult(roll, san_current, success, deg, loss, san_current - loss)
+    return SanityResult(roll, san_current, success, deg, loss, max(0, san_current - loss))
 
 
 def temporary_insanity_check(loss: int, int_value: int, rng: Optional[random.Random] = None) -> Optional[bool]:
