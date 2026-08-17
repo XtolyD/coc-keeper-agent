@@ -17,6 +17,18 @@ const modal = document.querySelector("#modal");
 const modalContent = document.querySelector("#modal-content");
 const toast = document.querySelector("#toast");
 
+const ATTRIBUTE_LABELS = {
+  STR: "力量",
+  CON: "体质",
+  DEX: "敏捷",
+  APP: "外貌",
+  POW: "意志",
+  SIZ: "体型",
+  INT: "智力",
+  EDU: "教育",
+  LUCK: "幸运",
+};
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
 }
@@ -42,8 +54,12 @@ function derivedValue(sheet, key) {
   return sheet?.derived?.[key] ?? "-";
 }
 
+function attributeLabel(name) {
+  return `${ATTRIBUTE_LABELS[name] || name} | ${name}`;
+}
+
 function attributesHTML(sheet, names = ["STR", "CON", "DEX", "POW", "INT", "EDU"]) {
-  return `<div class="stat-line">${names.map((name) => `<div class="stat"><span>${name}</span><strong>${esc(sheet.attributes[name])}</strong></div>`).join("")}</div>`;
+  return `<div class="stat-line">${names.map((name) => `<div class="stat"><span>${attributeLabel(name)}</span><strong>${esc(sheet.attributes[name])}</strong></div>`).join("")}</div>`;
 }
 
 function setView(view) {
@@ -112,7 +128,7 @@ async function generateCandidates(event) {
 
 function candidateCard(candidate) {
   const sheet = candidate.sheet;
-  const bars = ["STR","CON","DEX","APP","POW","SIZ","INT","EDU","LUCK"].map((name) => `<div class="attribute-row"><span>${name}</span><span class="bar-track"><span class="bar-fill" style="width:${Math.min(100, sheet.attributes[name])}%"></span></span><strong>${sheet.attributes[name]}</strong></div>`).join("");
+  const bars = ["STR","CON","DEX","APP","POW","SIZ","INT","EDU","LUCK"].map((name) => `<div class="attribute-row"><span>${attributeLabel(name)}</span><span class="bar-track"><span class="bar-fill" style="width:${Math.min(100, sheet.attributes[name])}%"></span></span><strong>${sheet.attributes[name]}</strong></div>`).join("");
   return `<button class="candidate${state.selectedCandidate === candidate.index ? " selected" : ""}" type="button" data-index="${candidate.index}">
     <h3>候选 ${candidate.index + 1}</h3><div class="attribute-bars">${bars}</div>
     <div class="derived-strip">HP ${esc(sheet.derived.HP)} · SAN ${esc(sheet.derived.SAN)}<br>DB ${esc(sheet.derived.DB)} · MOV ${esc(sheet.derived.MOV)}<br>兴趣点 ${candidate.interest_point_budget}</div>

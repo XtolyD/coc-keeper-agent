@@ -66,3 +66,11 @@ def test_web_status_declares_context_window(tmp_path, monkeypatch):
     client = TestClient(web.app)
     payload = client.get("/api/status").json()
     assert payload["context_window"] == 1_000_000
+
+
+def test_web_attribute_labels_are_bilingual():
+    client = TestClient(web.app)
+    script = client.get("/assets/app.js")
+    assert script.status_code == 200
+    assert 'APP: "外貌"' in script.text
+    assert 'return `${ATTRIBUTE_LABELS[name] || name} | ${name}`;' in script.text
