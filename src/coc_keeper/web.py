@@ -20,14 +20,17 @@ from .agent.agent import KeeperAgent
 from .agent.prompts import KP_SYSTEM_PROMPT
 from .agent.state import Session
 from .character import (
-    CharacterSheet, allocate_skill_points, base_skill_values,
-    generate_character_candidates, skill_point_budget,
+    CharacterSheet, allocate_occupation_points, allocate_skill_points,
+    base_skill_values, generate_character_candidates,
 )
 from .character_store import CharacterStore
 from .config import PROJECT_ROOT, Settings
 from .game_store import GameRecord, GameStore, TranscriptEntry
 from .module_store import ModuleStore
 from .modules import ModuleRuntime
+from .occupations import (
+    get_occupation, interest_point_budget, list_occupations,
+)
 
 
 class DraftRequest(BaseModel):
@@ -38,11 +41,17 @@ class DraftRequest(BaseModel):
 class CharacterCreateRequest(BaseModel):
     draft_id: str
     candidate_index: int = Field(ge=0, le=4)
-    skills: dict[str, int] = Field(default_factory=dict)
+    occupation_id: int
+    occupation_skills: list[str]
+    occupation_points: dict[str, int] = Field(default_factory=dict)
+    interest_points: dict[str, int] = Field(default_factory=dict)
 
 
 class SkillUpdateRequest(BaseModel):
-    skills: dict[str, int]
+    occupation_skills: list[str] = Field(default_factory=list)
+    occupation_points: dict[str, int] = Field(default_factory=dict)
+    interest_points: dict[str, int] = Field(default_factory=dict)
+    skills: dict[str, int] | None = None
 
 
 class ModulePathRequest(BaseModel):
@@ -92,7 +101,7 @@ class WebService:
 
 
 service = WebService()
-app = FastAPI(title="CoC Keeper", version="1.1.0")
+app = FastAPI(title="CoC Keeper", version="1.2.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -130,6 +139,11 @@ def list_characters():
     return [service.character_payload(record) for record in service.characters.list()]
 
 
+@app.get("/api/occupations")
+def occupations():
+    return [occupation.to_dict() for occupation in list_occupations()]
+
+
 @app.post("/api/character-drafts")
 def create_character_draft(request: DraftRequest):
     draft_id = uuid.uuid4().hex
@@ -140,7 +154,7 @@ def create_character_draft(request: DraftRequest):
         "candidates": [
             {
                 "index": index, "sheet": sheet.to_dict(),
-                "skill_budget": skill_point_budget(sheet.attributes),
+                "interest_point_budget": interest_point_budget(sheet.attributes),
                 "base_skills": base_skill_values(sheet.attributes),
             }
             for index, sheet in enumerate(candidates)
@@ -154,7 +168,10 @@ def save_character(request: CharacterCreateRequest):
     if candidates is None:
         raise HTTPException(status_code=404, detail="建卡候选已过期，请重新生成")
     sheet = CharacterSheet.from_dict(candidates[request.candidate_index].to_dict())
-    allocate_skill_points(sheet, request.skills)
+    allocate_occupation_points(
+        sheet, request.occupation_id, request.occupation_skills,
+        request.occupation_points, request.interest_points,
+    )
     record = service.characters.create(sheet)
     service.drafts.pop(request.draft_id, None)
     return service.character_payload(record)
@@ -163,8 +180,34 @@ def save_character(request: CharacterCreateRequest):
 @app.put("/api/characters/{character_id}/skills")
 def update_character_skills(character_id: str, request: SkillUpdateRequest):
     record = service.characters.get(character_id)
-    allocate_skill_points(record.sheet, request.skills)
+    if record.sheet.occupation_id is None:
+        if request.skills is None:
+            raise HTTPException(status_code=400, detail="旧版角色卡需要提交 skills 字段")
+        allocate_skill_points(record.sheet, request.skills)
+    else:
+        allocate_occupation_points(
+            record.sheet, record.sheet.occupation_id,
+            request.occupation_skills or record.sheet.occupation_skills,
+            request.occupation_points, request.interest_points,
+            occupation_skill_cap=record.sheet.occupation_skill_cap,
+            non_occupation_skill_cap=record.sheet.non_occupation_skill_cap,
+        )
     return service.character_payload(service.characters.save(character_id, record.sheet))
+
+
+@app.get("/api/character-drafts/{draft_id}/candidates/{candidate_index}/occupations/{occupation_id}")
+def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
+    candidates = service.drafts.get(draft_id)
+    if candidates is None:
+        raise HTTPException(status_code=404, detail="建卡候选已过期，请重新生成")
+    if not 0 <= candidate_index < len(candidates):
+        raise HTTPException(status_code=400, detail="属性候选序号无效")
+    sheet = candidates[candidate_index]
+    occupation = get_occupation(occupation_id)
+    payload = occupation.to_dict(sheet.attributes)
+    payload["interest_point_budget"] = interest_point_budget(sheet.attributes)
+    payload["base_skills"] = base_skill_values(sheet.attributes)
+    return payload
 
 
 @app.get("/api/modules")

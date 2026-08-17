@@ -93,6 +93,8 @@ SKILL_BASES: dict[str, Optional[int]] = {
     "驾驶（飞行/航海）": 1, "精神分析": 1, "心理学": 10,
     "读唇": 1, "骑术": 5, "科学": 1, "妙手": 10, "侦查": 25,
     "潜行": 20, "生存": 10, "游泳": 20, "投掷": 20, "追踪": 10,
+    "计算机使用": 5, "电子学": 1, "驯兽": 5, "潜水": 1,
+    "爆破": 1, "催眠": 1, "炮术": 1, "学识": 1,
 }
 
 
@@ -119,6 +121,15 @@ class CharacterSheet:
     age: int = 30
     attributes: Attributes = field(default_factory=Attributes)
     skills: dict[str, int] = field(default_factory=dict)
+    occupation_id: Optional[int] = None
+    occupation_name: str = ""
+    occupation_skills: list[str] = field(default_factory=list)
+    occupation_points: dict[str, int] = field(default_factory=dict)
+    interest_points: dict[str, int] = field(default_factory=dict)
+    occupation_skill_cap: int = 70
+    non_occupation_skill_cap: int = 60
+    credit_rating_min: int = 0
+    credit_rating_max: int = 99
     hp: Optional[int] = None
     mp: Optional[int] = None
     san: Optional[int] = None
@@ -183,6 +194,18 @@ class CharacterSheet:
             "current": {
                 "hp": self.hp, "mp": self.mp, "san": self.san, "luck": self.luck,
             },
+            "occupation": {
+                "id": self.occupation_id,
+                "name": self.occupation_name,
+                "skills": list(self.occupation_skills),
+                "skill_cap": self.occupation_skill_cap,
+                "other_skill_cap": self.non_occupation_skill_cap,
+                "credit_rating": [self.credit_rating_min, self.credit_rating_max],
+            },
+            "allocation": {
+                "occupation_points": dict(self.occupation_points),
+                "interest_points": dict(self.interest_points),
+            },
             "skills": dict(self.skills),
         }
 
@@ -192,6 +215,9 @@ class CharacterSheet:
         attrs = Attributes.from_dict(data.get("attributes", {}))
         current = data.get("current", {})
         derived = data.get("derived", {})
+        occupation = data.get("occupation", {})
+        allocation = data.get("allocation", {})
+        credit_range = occupation.get("credit_rating", [0, 99]) if isinstance(occupation, dict) else [0, 99]
 
         def current_value(name: str, fallback: int | None = None) -> int | None:
             value = current.get(name.lower())
@@ -205,6 +231,15 @@ class CharacterSheet:
         return cls(
             name=str(data.get("name", "调查员")), age=int(data.get("age", 30)),
             attributes=attrs, skills={k: int(v) for k, v in data.get("skills", {}).items()},
+            occupation_id=int(occupation["id"]) if isinstance(occupation, dict) and occupation.get("id") is not None else None,
+            occupation_name=str(occupation.get("name", "")) if isinstance(occupation, dict) else str(occupation or ""),
+            occupation_skills=list(occupation.get("skills", [])) if isinstance(occupation, dict) else [],
+            occupation_points={k: int(v) for k, v in allocation.get("occupation_points", {}).items()},
+            interest_points={k: int(v) for k, v in allocation.get("interest_points", {}).items()},
+            occupation_skill_cap=int(occupation.get("skill_cap", 70)) if isinstance(occupation, dict) else 70,
+            non_occupation_skill_cap=int(occupation.get("other_skill_cap", 60)) if isinstance(occupation, dict) else 60,
+            credit_rating_min=int(credit_range[0]) if credit_range else 0,
+            credit_rating_max=int(credit_range[1]) if len(credit_range) > 1 else 99,
             hp=current_value("HP"), mp=current_value("MP"), san=current_value("SAN"),
             luck=int(current.get("luck", data.get("luck", data.get("attributes", {}).get("LUCK", attrs.LUCK)))),
         )
@@ -246,8 +281,86 @@ def generate_character_candidates(
 
 
 def skill_point_budget(attrs: Attributes) -> int:
-    """通用建卡池：职业点 EDU×4，加兴趣点 INT×2。"""
+    """旧版兼容总池：职业点 EDU×4，加兴趣点 INT×2。"""
     return attrs.EDU * 4 + attrs.INT * 2
+
+
+def allocate_occupation_points(
+    sheet: CharacterSheet,
+    occupation_id: int,
+    occupation_skills: list[str],
+    occupation_points: dict[str, int],
+    interest_points: dict[str, int],
+    *,
+    occupation_skill_cap: int = 70,
+    non_occupation_skill_cap: int = 60,
+) -> CharacterSheet:
+    """按职业模板分别分配职业点与兴趣点。"""
+    from .occupations import (
+        get_occupation, interest_point_budget, occupation_point_budget,
+        validate_occupation_skills,
+    )
+
+    if not 1 <= int(non_occupation_skill_cap) <= int(occupation_skill_cap) <= 100:
+        raise ValueError("技能上限必须满足 1 <= 非本职上限 <= 本职上限 <= 100")
+    occupation = get_occupation(occupation_id)
+    selected = validate_occupation_skills(occupation, occupation_skills)
+    main_skills = set(selected)
+    bases = base_skill_values(sheet.attributes)
+
+    def normalize(points: dict[str, int], label: str) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        for raw_name, raw_value in points.items():
+            name = str(raw_name).strip()
+            if name not in bases:
+                raise ValueError(f"{label}包含未知技能: {name}")
+            value = int(raw_value)
+            if value < 0:
+                raise ValueError(f"技能「{name}」的{label}不能为负数")
+            if value:
+                normalized[name] = value
+        return normalized
+
+    occupational = normalize(occupation_points, "职业点")
+    interests = normalize(interest_points, "兴趣点")
+    invalid_occupational = set(occupational).difference(main_skills)
+    if invalid_occupational:
+        raise ValueError(f"职业点只能分配给本职技能: {', '.join(sorted(invalid_occupational))}")
+    if occupational.get("克苏鲁神话", 0) or interests.get("克苏鲁神话", 0):
+        raise ValueError("创建调查员时不能给克苏鲁神话分配技能点")
+
+    occupation_budget = occupation_point_budget(sheet.attributes, occupation)
+    interest_budget = interest_point_budget(sheet.attributes)
+    if sum(occupational.values()) > occupation_budget:
+        raise ValueError(f"职业点超出预算: 已用 {sum(occupational.values())}，可用 {occupation_budget}")
+    if sum(interests.values()) > interest_budget:
+        raise ValueError(f"兴趣点超出预算: 已用 {sum(interests.values())}，可用 {interest_budget}")
+    if occupational.get("信用评级", 0) < occupation.credit_min:
+        raise ValueError(f"信用评级必须先使用职业点达到 {occupation.credit_min}")
+
+    skills: dict[str, int] = {}
+    for name, base in bases.items():
+        value = base + occupational.get(name, 0) + interests.get(name, 0)
+        configured_cap = occupation_skill_cap if name in main_skills else non_occupation_skill_cap
+        cap = max(base, configured_cap)
+        if value > cap:
+            kind = "本职" if name in main_skills else "非本职"
+            raise ValueError(f"技能「{name}」超过{kind}技能上限 {cap}")
+        skills[name] = value
+    if not occupation.credit_min <= skills["信用评级"] <= occupation.credit_max:
+        raise ValueError(f"信用评级必须在职业范围 {occupation.credit_min}-{occupation.credit_max} 内")
+
+    sheet.occupation_id = occupation.id
+    sheet.occupation_name = occupation.name
+    sheet.occupation_skills = list(selected)
+    sheet.occupation_points = occupational
+    sheet.interest_points = interests
+    sheet.occupation_skill_cap = int(occupation_skill_cap)
+    sheet.non_occupation_skill_cap = int(non_occupation_skill_cap)
+    sheet.credit_rating_min = occupation.credit_min
+    sheet.credit_rating_max = occupation.credit_max
+    sheet.skills = skills
+    return sheet
 
 
 def allocate_skill_points(sheet: CharacterSheet, targets: dict[str, int]) -> CharacterSheet:
@@ -272,5 +385,15 @@ def allocate_skill_points(sheet: CharacterSheet, targets: dict[str, int]) -> Cha
 
 
 def skill_points_spent(sheet: CharacterSheet) -> int:
+    if sheet.occupation_points or sheet.interest_points:
+        return occupation_points_spent(sheet) + interest_points_spent(sheet)
     bases = base_skill_values(sheet.attributes)
     return sum(max(0, int(sheet.skills.get(name, base)) - base) for name, base in bases.items())
+
+
+def occupation_points_spent(sheet: CharacterSheet) -> int:
+    return sum(max(0, int(value)) for value in sheet.occupation_points.values())
+
+
+def interest_points_spent(sheet: CharacterSheet) -> int:
+    return sum(max(0, int(value)) for value in sheet.interest_points.values())

@@ -172,6 +172,16 @@ button { cursor: pointer; }
 .field input:focus, .field select:focus, .field textarea:focus, .search-input:focus { border-color: var(--green); box-shadow: 0 0 0 2px rgba(47, 113, 103, 0.12); }
 .form-footer { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 22px; }
 
+.occupation-detail { margin-top: 18px; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.occupation-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.occupation-head h3 { margin: 0 0 5px; font-size: 17px; }
+.occupation-detail p { margin: 14px 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.occupation-fixed { display: grid; gap: 8px; margin: 14px 0; }
+.occupation-fixed > strong, .occupation-choice > strong { font-size: 12px; }
+.skill-chip { display: inline-block; margin: 0 5px 5px 0; padding: 4px 7px; border: 1px solid var(--line); color: var(--green); font-size: 11px; }
+.occupation-choice { display: grid; grid-template-columns: minmax(170px, 1fr) repeat(3, minmax(150px, 1fr)); gap: 8px; align-items: center; margin-top: 10px; }
+.occupation-choice select { width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 4px; background: #fff; padding: 6px 8px; }
+
 .candidate-grid { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 10px; }
 .candidate {
   border: 1px solid var(--line);
@@ -197,6 +207,7 @@ button { cursor: pointer; }
 .budget-track { height: 8px; background: #e3e8e4; overflow: hidden; }
 .budget-fill { height: 100%; background: var(--green); transition: width 150ms ease; }
 .budget.over .budget-fill { background: var(--danger); }
+.dual-budget { display: flex; gap: 18px; }
 .skill-grid { display: grid; grid-template-columns: repeat(3, minmax(200px, 1fr)); border-top: 1px solid var(--line); }
 .skill-row { display: grid; grid-template-columns: 1fr 66px; gap: 8px; align-items: center; min-height: 48px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .skill-row:nth-child(3n+2), .skill-row:nth-child(3n+3) { border-left: 1px solid var(--line); }
@@ -204,6 +215,18 @@ button { cursor: pointer; }
 .skill-label strong { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-label span { color: var(--muted); font-size: 10px; }
 .skill-row input { width: 66px; min-height: 34px; border: 1px solid var(--line); border-radius: 4px; padding: 5px; }
+.allocation-head, .allocation-row { display: grid; grid-template-columns: minmax(190px, 1fr) 86px 86px 60px; gap: 10px; align-items: center; }
+.allocation-head { padding: 0 10px 7px; color: var(--muted); font-size: 10px; text-align: center; }
+.allocation-head span:first-child { text-align: left; }
+.allocation-grid { grid-template-columns: 1fr; }
+.allocation-row { min-height: 56px; }
+.allocation-row:nth-child(n) { border-left: 0; }
+.allocation-row.main-skill { background: #f4f8f5; box-shadow: inset 3px 0 var(--green); }
+.allocation-row.invalid { background: #fff0f0; box-shadow: inset 3px 0 var(--danger); }
+.allocation-row label { display: grid; gap: 2px; justify-items: center; color: var(--muted); font-size: 9px; }
+.allocation-row input { width: 72px; }
+.allocation-row input:disabled { background: #edf0ee; color: #8b938e; }
+.skill-total { text-align: center; font-size: 14px; }
 
 .upload-band, .new-game-band { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; padding: 16px 0 22px; border-top: 1px solid var(--line); }
 .file-field { min-height: 40px; padding: 7px; border: 1px dashed #9ba7a0; background: var(--surface); }
@@ -272,8 +295,14 @@ button { cursor: pointer; }
   .form-grid, .upload-band, .new-game-band { grid-template-columns: 1fr; }
   .candidate-grid { grid-template-columns: 1fr; }
   .candidate { min-height: 0; }
+  .wizard-toolbar, .dual-budget, .occupation-head { align-items: stretch; flex-direction: column; }
+  .budget { min-width: 0; width: 100%; }
+  .occupation-choice { grid-template-columns: 1fr; }
   .skill-grid { grid-template-columns: 1fr; }
   .skill-row:nth-child(even) { border-left: 0; }
+  .allocation-head { display: none; }
+  .allocation-row { grid-template-columns: minmax(120px, 1fr) 68px 68px 42px; gap: 6px; padding: 7px 5px; }
+  .allocation-row input { width: 62px; }
   .game-layout { height: calc(100vh - 112px); grid-template-columns: 1fr; }
   .game-layout > .game-panel:first-child, .game-layout > .game-panel:last-child { display: none; }
   .provider-status span:last-child { display: none; }

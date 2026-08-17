@@ -1,12 +1,15 @@
 const state = {
   view: "characters",
   status: null,
+  occupations: [],
   characters: [],
   modules: [],
   games: [],
   activeGame: null,
   draft: null,
   selectedCandidate: null,
+  occupationPreview: null,
+  selectedOccupationSkills: [],
 };
 
 const content = document.querySelector("#content");
@@ -62,7 +65,7 @@ function renderCharacters() {
   const rows = state.characters.map((record) => {
     const sheet = record.sheet;
     return `<div class="collection-row">
-      <div><div class="row-title">${esc(sheet.name)}</div><div class="row-meta">${esc(sheet.age)} 岁 · 永久角色卡 · ${esc(record.skill_points_spent)}/${esc(record.skill_budget)} 技能点</div></div>
+      <div><div class="row-title">${esc(sheet.name)}</div><div class="row-meta">${esc(sheet.age)} 岁 · ${esc(sheet.occupation?.name || "旧版未设职业")} · 永久角色卡</div><div class="row-meta">职业 ${esc(record.occupation_points_spent)}/${esc(record.occupation_point_budget)} · 兴趣 ${esc(record.interest_points_spent)}/${esc(record.interest_point_budget)}</div></div>
       ${attributesHTML(sheet)}
       <button class="button edit-skills" data-id="${record.id}" type="button">${icon("sliders-horizontal")}技能</button>
     </div>`;
@@ -79,6 +82,8 @@ function renderCharacters() {
 function openCharacterWizard() {
   state.draft = null;
   state.selectedCandidate = null;
+  state.occupationPreview = null;
+  state.selectedOccupationSkills = [];
   modalContent.innerHTML = `<form class="modal-body" id="character-start">
     <h2 class="modal-title">新建调查员</h2>
     <div class="form-grid">
@@ -110,14 +115,14 @@ function candidateCard(candidate) {
   const bars = ["STR","CON","DEX","APP","POW","SIZ","INT","EDU","LUCK"].map((name) => `<div class="attribute-row"><span>${name}</span><span class="bar-track"><span class="bar-fill" style="width:${Math.min(100, sheet.attributes[name])}%"></span></span><strong>${sheet.attributes[name]}</strong></div>`).join("");
   return `<button class="candidate${state.selectedCandidate === candidate.index ? " selected" : ""}" type="button" data-index="${candidate.index}">
     <h3>候选 ${candidate.index + 1}</h3><div class="attribute-bars">${bars}</div>
-    <div class="derived-strip">HP ${esc(sheet.derived.HP)} · SAN ${esc(sheet.derived.SAN)}<br>DB ${esc(sheet.derived.DB)} · MOV ${esc(sheet.derived.MOV)}<br>技能点 ${candidate.skill_budget}</div>
+    <div class="derived-strip">HP ${esc(sheet.derived.HP)} · SAN ${esc(sheet.derived.SAN)}<br>DB ${esc(sheet.derived.DB)} · MOV ${esc(sheet.derived.MOV)}<br>兴趣点 ${candidate.interest_point_budget}</div>
   </button>`;
 }
 
 function renderCandidates() {
   modalContent.innerHTML = `<div class="modal-body"><h2 class="modal-title">选择属性</h2>
     <div class="candidate-grid">${state.draft.candidates.map(candidateCard).join("")}</div>
-    <div class="form-footer"><button class="button primary" id="choose-candidate" type="button" disabled>${icon("arrow-right")}分配技能</button></div>
+    <div class="form-footer"><button class="button primary" id="choose-candidate" type="button" disabled>${icon("arrow-right")}选择职业</button></div>
   </div>`;
   refreshIcons();
   document.querySelectorAll(".candidate").forEach((candidate) => candidate.addEventListener("click", () => {
@@ -126,44 +131,116 @@ function renderCandidates() {
   }));
   const next = document.querySelector("#choose-candidate");
   next.disabled = state.selectedCandidate === null;
-  next.addEventListener("click", () => renderSkillAllocation());
+  next.addEventListener("click", renderOccupationSelection);
+}
+
+function renderOccupationSelection() {
+  const selectedId = state.occupationPreview?.id || "";
+  const options = state.occupations.map((occupation) => `<option value="${occupation.id}" ${occupation.id === selectedId ? "selected" : ""}>${esc(occupation.name)}</option>`).join("");
+  const preview = state.occupationPreview;
+  const fixed = preview?.fixed_skills || [];
+  const allSkills = preview ? Object.keys(preview.base_skills).filter((name) => name !== "克苏鲁神话") : [];
+  const groups = preview ? preview.choice_groups.map((group, groupIndex) => `<div class="occupation-choice"><strong>组选技能：选择 ${group.count} 项</strong>${Array.from({length: group.count}, (_, slot) => `<select class="occupation-skill-select" data-kind="group" data-group="${groupIndex}" data-slot="${slot}" required><option value="">选择技能</option>${group.skills.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("")}</select>`).join("")}</div>`).join("") : "";
+  const free = preview ? Array.from({length: preview.free_choice_count}, (_, slot) => `<select class="occupation-skill-select" data-kind="free" data-slot="${slot}" required><option value="">选择任意个人或时代特长</option>${allSkills.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("")}</select>`).join("") : "";
+  modalContent.innerHTML = `<div class="modal-body"><h2 class="modal-title">选择职业</h2>
+    <div class="field"><label for="occupation-search">查找职业</label><input id="occupation-search" placeholder="输入名称筛选"></div>
+    <div class="field"><label for="occupation-select">具体职业</label><select id="occupation-select"><option value="">选择职业</option>${options}</select></div>
+    ${preview ? `<section class="occupation-detail"><div class="occupation-head"><div><h3>${esc(preview.name)}</h3><div class="row-meta">信用评级 ${preview.credit_min}-${preview.credit_max} · ${esc(preview.point_formula_label)}</div></div><strong>${preview.occupation_point_budget} 职业点</strong></div><p>${esc(preview.skill_template)}</p><div class="occupation-fixed"><strong>固定本职技能</strong><div>${fixed.map((name) => `<span class="skill-chip">${esc(name)}</span>`).join("")}</div></div>${groups}${preview.free_choice_count ? `<div class="occupation-choice"><strong>任意特长：选择 ${preview.free_choice_count} 项</strong>${free}</div>` : ""}</section>` : ""}
+    <div class="form-footer"><button class="button primary" id="confirm-occupation" type="button" ${preview ? "" : "disabled"}>${icon("arrow-right")}分配技能点</button></div>
+  </div>`;
+  refreshIcons();
+  const select = document.querySelector("#occupation-select");
+  document.querySelector("#occupation-search").addEventListener("input", (event) => {
+    const term = event.target.value.trim();
+    [...select.options].forEach((option, index) => { if (index) option.hidden = term && !option.textContent.includes(term); });
+  });
+  select.addEventListener("change", async () => {
+    if (!select.value) return;
+    try {
+      state.occupationPreview = await api(`/api/character-drafts/${state.draft.draft_id}/candidates/${state.selectedCandidate}/occupations/${select.value}`);
+      renderOccupationSelection();
+    } catch (error) { notify(error.message, true); }
+  });
+  document.querySelector("#confirm-occupation").addEventListener("click", () => {
+    const selected = [...fixed];
+    const selectors = [...document.querySelectorAll(".occupation-skill-select")];
+    if (selectors.some((item) => !item.value)) { notify("请完成所有本职技能选择", true); return; }
+    selectors.forEach((item) => selected.push(item.value));
+    if (new Set(selected).size !== selected.length) { notify("本职技能不能重复选择", true); return; }
+    state.selectedOccupationSkills = selected;
+    renderSkillAllocation();
+  });
 }
 
 function renderSkillAllocation(existingRecord = null) {
+  if (existingRecord && !existingRecord.sheet.occupation?.id) { renderLegacySkillAllocation(existingRecord); return; }
   const candidate = existingRecord ? {
     sheet: existingRecord.sheet,
     base_skills: existingRecord.base_skills,
-    skill_budget: existingRecord.skill_budget,
+    occupation_point_budget: existingRecord.occupation_point_budget,
+    interest_point_budget: existingRecord.interest_point_budget,
   } : state.draft.candidates[state.selectedCandidate];
+  const occupation = existingRecord
+    ? {...state.occupations.find((item) => item.id === existingRecord.sheet.occupation.id), occupation_point_budget: existingRecord.occupation_point_budget, interest_point_budget: existingRecord.interest_point_budget}
+    : state.occupationPreview;
+  const mainSkills = new Set(existingRecord ? existingRecord.sheet.occupation.skills : state.selectedOccupationSkills);
+  const occupationValues = existingRecord ? existingRecord.sheet.allocation.occupation_points : {"信用评级": occupation.credit_min};
+  const interestValues = existingRecord ? existingRecord.sheet.allocation.interest_points : {};
   const bases = candidate.base_skills;
-  const values = existingRecord ? existingRecord.sheet.skills : bases;
-  const rows = Object.keys(values).sort((a, b) => a.localeCompare(b, "zh-CN")).map((name) => `<label class="skill-row" data-name="${esc(name)}"><span class="skill-label"><strong title="${esc(name)}">${esc(name)}</strong><span>基础 ${esc(bases[name] ?? 0)}</span></span><input class="skill-input" type="number" min="${esc(bases[name] ?? 0)}" max="100" value="${esc(values[name])}" data-skill="${esc(name)}"></label>`).join("");
-  modalContent.innerHTML = `<div class="modal-body"><h2 class="modal-title">分配技能</h2>
-    <div class="wizard-toolbar"><input class="search-input" id="skill-search" placeholder="搜索技能" aria-label="搜索技能"><div class="budget" id="skill-budget"><div class="budget-line"><span>技能点</span><strong><span id="spent">0</span> / ${candidate.skill_budget}</strong></div><div class="budget-track"><div class="budget-fill" id="budget-fill"></div></div></div></div>
-    <div class="skill-grid" id="skill-grid">${rows}</div>
-    <div class="form-footer"><button class="button primary" id="save-character" type="button">${icon("save")}永久保存</button></div>
+  const rows = Object.keys(bases).sort((a, b) => a.localeCompare(b, "zh-CN")).map((name) => {
+    const main = mainSkills.has(name);
+    const configuredCap = main ? 70 : 60;
+    const cap = Math.max(bases[name], configuredCap);
+    const locked = name === "克苏鲁神话";
+    return `<div class="skill-row allocation-row${main ? " main-skill" : ""}" data-name="${esc(name)}" data-base="${bases[name]}" data-cap="${cap}"><span class="skill-label"><strong title="${esc(name)}">${esc(name)}</strong><span>基础 ${bases[name]} · ${main ? "本职" : "非本职"}上限 ${cap}</span></span><label><span>职业</span><input class="point-input occupation-input" type="number" min="0" value="${occupationValues[name] || 0}" data-skill="${esc(name)}" ${main && !locked ? "" : "disabled"}></label><label><span>兴趣</span><input class="point-input interest-input" type="number" min="0" value="${interestValues[name] || 0}" data-skill="${esc(name)}" ${locked ? "disabled" : ""}></label><strong class="skill-total">${bases[name]}</strong></div>`;
+  }).join("");
+  modalContent.innerHTML = `<div class="modal-body"><h2 class="modal-title">${esc(occupation.name)}技能分配</h2>
+    <div class="wizard-toolbar"><input class="search-input" id="skill-search" placeholder="搜索技能" aria-label="搜索技能"><div class="dual-budget"><div class="budget" id="occupation-budget"><div class="budget-line"><span>职业点</span><strong><span id="occupation-spent">0</span> / ${occupation.occupation_point_budget}</strong></div><div class="budget-track"><div class="budget-fill"></div></div></div><div class="budget" id="interest-budget"><div class="budget-line"><span>兴趣点</span><strong><span id="interest-spent">0</span> / ${occupation.interest_point_budget}</strong></div><div class="budget-track"><div class="budget-fill"></div></div></div></div></div>
+    <div class="allocation-head"><span>技能</span><span>职业点</span><span>兴趣点</span><span>最终值</span></div><div class="skill-grid allocation-grid" id="skill-grid">${rows}</div>
+    <div class="form-footer"><span class="row-meta">本职上限 70 · 非本职上限 60 · 信用评级 ${occupation.credit_min}-${occupation.credit_max}</span><button class="button primary" id="save-character" type="button">${icon("save")}永久保存</button></div>
   </div>`;
   refreshIcons();
   const updateBudget = () => {
-    let spent = 0;
-    document.querySelectorAll(".skill-input").forEach((input) => { spent += Math.max(0, Number(input.value) - Number(input.min)); });
-    document.querySelector("#spent").textContent = spent;
-    document.querySelector("#budget-fill").style.width = `${Math.min(100, spent / candidate.skill_budget * 100)}%`;
-    document.querySelector("#skill-budget").classList.toggle("over", spent > candidate.skill_budget);
-    document.querySelector("#save-character").disabled = spent > candidate.skill_budget;
+    let occupationSpent = 0;
+    let interestSpent = 0;
+    let invalid = false;
+    document.querySelectorAll(".allocation-row").forEach((row) => {
+      const occupational = Number(row.querySelector(".occupation-input").value || 0);
+      const interest = Number(row.querySelector(".interest-input").value || 0);
+      occupationSpent += occupational;
+      interestSpent += interest;
+      const total = Number(row.dataset.base) + occupational + interest;
+      row.querySelector(".skill-total").textContent = total;
+      const over = total > Number(row.dataset.cap) || occupational < 0 || interest < 0;
+      row.classList.toggle("invalid", over);
+      invalid ||= over;
+    });
+    const creditOccupation = Number(document.querySelector('.occupation-input[data-skill="信用评级"]').value || 0);
+    const creditTotal = Number(document.querySelector('.skill-row[data-name="信用评级"] .skill-total').textContent);
+    invalid ||= creditOccupation < occupation.credit_min || creditTotal > occupation.credit_max;
+    for (const [kind, spent, budget] of [["occupation", occupationSpent, occupation.occupation_point_budget], ["interest", interestSpent, occupation.interest_point_budget]]) {
+      document.querySelector(`#${kind}-spent`).textContent = spent;
+      const box = document.querySelector(`#${kind}-budget`);
+      box.querySelector(".budget-fill").style.width = `${Math.min(100, spent / budget * 100)}%`;
+      box.classList.toggle("over", spent > budget);
+      invalid ||= spent > budget;
+    }
+    document.querySelector("#save-character").disabled = invalid;
   };
-  document.querySelectorAll(".skill-input").forEach((input) => input.addEventListener("input", updateBudget));
+  document.querySelectorAll(".point-input").forEach((input) => input.addEventListener("input", updateBudget));
   document.querySelector("#skill-search").addEventListener("input", (event) => {
     const term = event.target.value.trim();
     document.querySelectorAll(".skill-row").forEach((row) => { row.hidden = term && !row.dataset.name.includes(term); });
   });
   document.querySelector("#save-character").addEventListener("click", async () => {
-    const skills = Object.fromEntries([...document.querySelectorAll(".skill-input")].map((input) => [input.dataset.skill, Number(input.value)]));
+    const occupation_points = Object.fromEntries([...document.querySelectorAll(".occupation-input:not(:disabled)")].map((input) => [input.dataset.skill, Number(input.value)]));
+    const interest_points = Object.fromEntries([...document.querySelectorAll(".interest-input:not(:disabled)")].map((input) => [input.dataset.skill, Number(input.value)]));
+    const payload = {occupation_skills: [...mainSkills], occupation_points, interest_points};
     try {
       if (existingRecord) {
-        await api(`/api/characters/${existingRecord.id}/skills`, {method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({skills})});
+        await api(`/api/characters/${existingRecord.id}/skills`, {method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload)});
       } else {
-        await api("/api/characters", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({draft_id: state.draft.draft_id, candidate_index: state.selectedCandidate, skills})});
+        await api("/api/characters", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({...payload, draft_id: state.draft.draft_id, candidate_index: state.selectedCandidate, occupation_id: occupation.id})});
       }
       modal.close();
       await loadCharacters();
@@ -171,6 +248,19 @@ function renderSkillAllocation(existingRecord = null) {
     } catch (error) { notify(error.message, true); }
   });
   updateBudget();
+}
+
+function renderLegacySkillAllocation(existingRecord) {
+  const bases = existingRecord.base_skills;
+  const values = existingRecord.sheet.skills;
+  const rows = Object.keys(values).sort((a, b) => a.localeCompare(b, "zh-CN")).map((name) => `<label class="skill-row" data-name="${esc(name)}"><span class="skill-label"><strong>${esc(name)}</strong><span>基础 ${esc(bases[name] ?? 0)}</span></span><input class="skill-input" type="number" min="${esc(bases[name] ?? 0)}" max="100" value="${esc(values[name])}" data-skill="${esc(name)}"></label>`).join("");
+  modalContent.innerHTML = `<div class="modal-body"><h2 class="modal-title">旧版技能分配</h2><div class="wizard-toolbar"><input class="search-input" id="skill-search" placeholder="搜索技能"><div class="budget" id="skill-budget"><div class="budget-line"><span>技能点</span><strong><span id="spent">0</span> / ${existingRecord.skill_budget}</strong></div></div></div><div class="skill-grid">${rows}</div><div class="form-footer"><button class="button primary" id="save-character" type="button">${icon("save")}保存</button></div></div>`;
+  refreshIcons();
+  const update = () => { let spent = 0; document.querySelectorAll(".skill-input").forEach((input) => { spent += Math.max(0, Number(input.value) - Number(input.min)); }); document.querySelector("#spent").textContent = spent; document.querySelector("#save-character").disabled = spent > existingRecord.skill_budget; };
+  document.querySelectorAll(".skill-input").forEach((input) => input.addEventListener("input", update));
+  document.querySelector("#skill-search").addEventListener("input", (event) => { const term = event.target.value.trim(); document.querySelectorAll(".skill-row").forEach((row) => { row.hidden = term && !row.dataset.name.includes(term); }); });
+  document.querySelector("#save-character").addEventListener("click", async () => { const skills = Object.fromEntries([...document.querySelectorAll(".skill-input")].map((input) => [input.dataset.skill, Number(input.value)])); try { await api(`/api/characters/${existingRecord.id}/skills`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({skills})}); modal.close(); await loadCharacters(); notify("角色卡已保存"); } catch (error) { notify(error.message, true); } });
+  update();
 }
 
 function openSkillEditor(id) {
@@ -273,8 +363,8 @@ async function loadGames() { state.games = await api("/api/games"); render(); }
 
 async function bootstrap() {
   try {
-    [state.status, state.characters, state.modules, state.games] = await Promise.all([
-      api("/api/status"), api("/api/characters"), api("/api/modules"), api("/api/games"),
+    [state.status, state.occupations, state.characters, state.modules, state.games] = await Promise.all([
+      api("/api/status"), api("/api/occupations"), api("/api/characters"), api("/api/modules"), api("/api/games"),
     ]);
     const provider = document.querySelector("#provider-status");
     provider.className = `provider-status ${state.status.configured ? "ready" : "error"}`;

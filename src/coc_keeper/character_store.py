@@ -10,7 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .character import CharacterSheet, base_skill_values, skill_point_budget, skill_points_spent
+from .character import (
+    CharacterSheet, base_skill_values, interest_points_spent,
+    occupation_points_spent, skill_points_spent,
+)
 
 
 def _now() -> str:
@@ -25,14 +28,25 @@ class CharacterRecord:
     updated_at: str
 
     def to_dict(self) -> dict[str, Any]:
+        occupation_budget = self.sheet.attributes.EDU * 4
+        interest_budget = self.sheet.attributes.INT * 2
+        if self.sheet.occupation_id is not None:
+            from .occupations import get_occupation, occupation_point_budget
+            occupation_budget = occupation_point_budget(
+                self.sheet.attributes, get_occupation(self.sheet.occupation_id),
+            )
         return {
             "version": 1,
             "id": self.id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "permanent": True,
-            "skill_budget": skill_point_budget(self.sheet.attributes),
+            "skill_budget": occupation_budget + interest_budget,
             "skill_points_spent": skill_points_spent(self.sheet),
+            "occupation_point_budget": occupation_budget,
+            "occupation_points_spent": occupation_points_spent(self.sheet),
+            "interest_point_budget": interest_budget,
+            "interest_points_spent": interest_points_spent(self.sheet),
             "base_skills": base_skill_values(self.sheet.attributes),
             "sheet": self.sheet.to_dict(),
         }

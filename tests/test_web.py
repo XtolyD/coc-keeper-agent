@@ -24,13 +24,23 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     draft = draft_response.json()
     assert len(draft["candidates"]) == 5
     candidate = draft["candidates"][0]
+    occupations = client.get("/api/occupations").json()
+    accountant = next(item for item in occupations if item["id"] == 2)
+    selected_skills = list(accountant["fixed_skills"])
+    extras = [name for name in candidate["base_skills"] if name not in selected_skills and name != "克苏鲁神话"]
+    selected_skills.extend(extras[:accountant["free_choice_count"]])
     character_response = client.post("/api/characters", json={
         "draft_id": draft["draft_id"], "candidate_index": 0,
-        "skills": candidate["base_skills"],
+        "occupation_id": accountant["id"],
+        "occupation_skills": selected_skills,
+        "occupation_points": {"信用评级": accountant["credit_min"]},
+        "interest_points": {},
     })
     assert character_response.status_code == 200
     character = character_response.json()
     assert character["permanent"] is True
+    assert character["sheet"]["occupation"]["name"] == accountant["name"]
+    assert character["occupation_point_budget"] == candidate["sheet"]["attributes"]["EDU"] * 4
 
     module_response = client.post(
         "/api/modules/upload",

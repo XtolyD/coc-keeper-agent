@@ -12,6 +12,7 @@ python-multipart>=0.0.9
 # ===== 开发 =====
 pytest>=8.0
 httpx>=0.27        # FastAPI API 测试
+openpyxl>=3.1      # 仅用于从参考 Excel 重新生成职业目录
 
 # ===== 后续里程碑按需启用（见 docs/learning-plan.md）=====
 # M2 RAG 检索:   rank-bm25
