@@ -70,6 +70,7 @@ def test_web_status_declares_context_window(tmp_path, monkeypatch):
 
 def test_web_attribute_labels_are_bilingual():
     client = TestClient(web.app)
+    assert "/assets/app.js?v=1.2.1" in client.get("/").text
     script = client.get("/assets/app.js")
     assert script.status_code == 200
     assert 'APP: "外貌"' in script.text
