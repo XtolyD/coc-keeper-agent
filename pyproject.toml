@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coc-keeper-agent"
+version = "0.1.0"
+description = "CoC 7th 版跑团 KP Agent —— 用于学习 Agent 构建工程的入门项目"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["openai>=1.30"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

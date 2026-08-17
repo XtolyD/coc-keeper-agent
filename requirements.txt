@@ -1,0 +1,12 @@
+# ===== 规则引擎（无第三方运行时依赖）=====
+pymupdf>=1.24      # 仅 scripts/extract_rules.py 抽取规则书 PDF 使用
+
+# ===== M3 KP Agent =====
+openai>=1.30       # OpenAI 兼容接口（micuapi/OpenRouter/DeepSeek 等）
+
+# ===== 开发 =====
+pytest>=8.0
+
+# ===== 后续里程碑按需启用（见 docs/learning-plan.md）=====
+# M2 RAG 检索:   rank-bm25
+# M5 工程化:     pydantic>=2.6  rich  langfuse

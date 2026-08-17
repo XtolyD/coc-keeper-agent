@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/
+
+# 密钥
+.env
+
+# 生成数据（可由 scripts/extract_rules.py 重新生成）
+data/rulebook/*.txt
+
+# pytest 缓存（已禁用 cacheprovider；首跑遗留的孤儿目录）
+.pytest_cache/
+pytest-cache-files-*/
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
