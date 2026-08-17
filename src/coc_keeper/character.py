@@ -180,6 +180,9 @@ class CharacterSheet:
                 "Build": self.build,
                 "MOV": self.mov,
             },
+            "current": {
+                "hp": self.hp, "mp": self.mp, "san": self.san, "luck": self.luck,
+            },
             "skills": dict(self.skills),
         }
 
@@ -203,7 +206,7 @@ class CharacterSheet:
             name=str(data.get("name", "调查员")), age=int(data.get("age", 30)),
             attributes=attrs, skills={k: int(v) for k, v in data.get("skills", {}).items()},
             hp=current_value("HP"), mp=current_value("MP"), san=current_value("SAN"),
-            luck=int(data.get("luck", data.get("attributes", {}).get("LUCK", attrs.LUCK))),
+            luck=int(current.get("luck", data.get("luck", data.get("attributes", {}).get("LUCK", attrs.LUCK)))),
         )
 
 
@@ -226,3 +229,48 @@ def roll_attributes(rng: Optional[random.Random] = None) -> Attributes:
 def create_character(name: str = "调查员", age: int = 30, rng: Optional[random.Random] = None) -> CharacterSheet:
     """随机生成一名调查员（属性随机，技能为基础值）。"""
     return CharacterSheet(name=name, age=age, attributes=roll_attributes(rng))
+
+
+def generate_character_candidates(
+    name: str = "调查员",
+    age: int = 30,
+    *,
+    count: int = 5,
+    rng: Optional[random.Random] = None,
+) -> list[CharacterSheet]:
+    """生成多套完整属性候选，供玩家选择后再分配技能点。"""
+    if not 1 <= int(count) <= 20:
+        raise ValueError("候选数量必须为 1..20")
+    rng = rng or random
+    return [create_character(name=name, age=age, rng=rng) for _ in range(int(count))]
+
+
+def skill_point_budget(attrs: Attributes) -> int:
+    """通用建卡池：职业点 EDU×4，加兴趣点 INT×2。"""
+    return attrs.EDU * 4 + attrs.INT * 2
+
+
+def allocate_skill_points(sheet: CharacterSheet, targets: dict[str, int]) -> CharacterSheet:
+    """把目标技能值应用到角色卡，并校验基础值、单项上限和总点数。"""
+    bases = base_skill_values(sheet.attributes)
+    normalized = dict(bases)
+    spent = 0
+    for skill, raw_value in targets.items():
+        name = str(skill).strip()
+        if name not in bases:
+            raise ValueError(f"未知技能: {name}")
+        value = int(raw_value)
+        if not bases[name] <= value <= 100:
+            raise ValueError(f"技能「{name}」必须在基础值 {bases[name]} 与 100 之间")
+        normalized[name] = value
+        spent += value - bases[name]
+    budget = skill_point_budget(sheet.attributes)
+    if spent > budget:
+        raise ValueError(f"技能点超出预算: 已用 {spent}，可用 {budget}")
+    sheet.skills = normalized
+    return sheet
+
+
+def skill_points_spent(sheet: CharacterSheet) -> int:
+    bases = base_skill_values(sheet.attributes)
+    return sum(max(0, int(sheet.skills.get(name, base)) - base) for name, base in bases.items())

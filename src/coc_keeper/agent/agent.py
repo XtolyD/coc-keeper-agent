@@ -71,8 +71,6 @@ class KeeperAgent:
             self._refresh_system_prompt()
             resp = self.llm.chat(self.memory.messages(), tools=TOOLS_SCHEMA)
             self._record_llm(resp)
-            if self.tracer.summary()["total_tokens"] > self.settings.max_total_tokens:
-                return "本次会话已达到 token 预算，请保存战役后开启新会话继续。"
             self._apply_spoiler_gate(resp)
             self.memory.add_assistant(resp)
             if resp.tool_calls:

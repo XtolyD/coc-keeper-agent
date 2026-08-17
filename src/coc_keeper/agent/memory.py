@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from .llm import LLMResponse
@@ -18,6 +19,13 @@ class Memory:
 
     def messages(self) -> list[dict[str, Any]]:
         return [{"role": "system", "content": self.system_prompt}] + self._messages
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return deepcopy(self._messages)
+
+    def restore(self, messages: list[dict[str, Any]]) -> None:
+        self._messages = deepcopy(messages)
+        self._trim()
 
     def add_user(self, text: str) -> None:
         self._messages.append({"role": "user", "content": text})

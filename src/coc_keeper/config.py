@@ -42,19 +42,20 @@ class Settings:
     预期在 .env 中声明以下变量（换任何 OpenAI 兼容供应商都只需改这三个）：
         DEEPSEEK_API_KEY   （密钥，必填）
         DEEPSEEK_BASE_URL  （默认 https://api.deepseek.com）
-        DEEPSEEK_MODEL     （默认 deepseek-chat）
+        DEEPSEEK_MODEL     （默认 deepseek-v4-flash）
+        DEEPSEEK_CONTEXT_WINDOW （默认 1000000）
     """
-    model: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"))
+    model: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"))
     base_url: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     api_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
+    context_window: int = field(default_factory=lambda: int(os.environ.get("DEEPSEEK_CONTEXT_WINDOW", "1000000")))
 
     # 运行参数
     max_steps: int = 8          # 单次 respond 的工具调用循环上限
     max_tokens: int = 2048
     temperature: float = 0.7
-    history_limit: int = 40     # 保留最近消息条数
+    history_limit: int = 80     # 近期消息；完整历史由战役存储与检索保留
     max_input_chars: int = 4000
-    max_total_tokens: int = 32000
     request_timeout: float = 60.0
     max_retries: int = 2
 
@@ -64,4 +65,4 @@ class Settings:
 
     def describe(self) -> str:
         """返回不包含密钥的模型摘要，用于日志展示。"""
-        return f"model={self.model} base_url={self.base_url}"
+        return f"model={self.model} context_window={self.context_window} base_url={self.base_url}"

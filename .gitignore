@@ -13,7 +13,9 @@ dist/
 
 # 生成数据（可由 scripts/extract_rules.py 重新生成）
 data/rulebook/*.txt
-data/modules/*.json
+data/modules/
+data/characters/
+data/campaigns/
 saves/
 
 # pytest 缓存（已禁用 cacheprovider；首跑遗留的孤儿目录）

@@ -39,13 +39,20 @@ coc-keeper-agent/
 │   ├── smoke_llm.py          # LLM 连通性 / 工具调用冒烟测试
 │   └── run_evals.py          # 固定种子离线评估
 ├── data/
-│   └── rulebook/             # 抽取出的规则全文（gitignored，可再生成）
+│   ├── rulebook/             # 抽取出的规则全文（gitignored，可再生成）
+│   ├── characters/           # 永久角色卡，与模组/战役解耦
+│   ├── modules/              # 导入后的 Keeper 私密模组
+│   └── campaigns/            # 战役状态与完整对话记录
 ├── src/coc_keeper/
 │   ├── __init__.py
 │   ├── config.py             # 配置：从 .env 读取模型与运行参数
 │   ├── cli.py                # 交互式跑团入口（python -m coc_keeper.cli）
 │   ├── dice.py               # 骰子机制：d100、奖励/惩罚骰、成功度、难度
 │   ├── character.py          # 角色卡：属性、衍生属性、技能、建卡
+│   ├── character_store.py    # 永久角色卡存储
+│   ├── module_store.py       # 模组库
+│   ├── game_store.py         # 战役、完整记录与旧回合检索
+│   ├── web.py                # FastAPI WebUI/API
 │   ├── evaluation.py         # 硬指标评估 + 叙事 rubric
 │   ├── scenarios.py          # 端到端规则验收场景
 │   ├── modules.py            # PDF 模组导入、顺序推进与防剧透
@@ -64,7 +71,7 @@ coc-keeper-agent/
 │       ├── state.py          #   多人状态与 JSON 存档
 │       ├── security.py       #   输入边界与注入防护
 │       └── observability.py  #   tracing、token 与成本统计
-└── tests/                    # 68 个单元/集成测试
+└── tests/                    # 76 个单元/集成测试
 ```
 
 ---
@@ -109,6 +116,44 @@ python -m coc_keeper.cli --module "D:\Modules\scenario.pdf" --autosave saves\sce
 CLI 内可使用 `/status`、`/players`、`/trace`、`/save [路径]` 和 `/help`。
 规则层、RAG、存档与离线评估不需要网络；在线 KP Agent 需要 `openai` 和兼容 API 密钥。
 
+## WebUI
+
+在 `.env` 中配置密钥后启动本地界面：
+
+```powershell
+conda activate coc-keeper
+cd coc-keeper-agent
+coc-keeper-web
+```
+
+然后打开 `http://127.0.0.1:8765`。也可以运行：
+
+```powershell
+python -m coc_keeper.web
+```
+
+WebUI 的推荐流程是：
+
+1. 在“角色卡”中生成五组完整属性，选择一组，并在总预算内自行分配技能点。
+2. 永久保存角色卡。角色卡保存在 `data/characters/`，不属于任何模组，可被多个战役重复选择。
+3. 在“模组库”中导入 PDF。模组保存在 `data/modules/`，完整内容只供 Keeper 侧使用。
+4. 在“战役”中分别选择角色卡和模组后开局。战役保存在 `data/campaigns/`，角色状态变化会同步回永久角色卡。
+
+角色卡、模组和战役是三个独立实体；删除或更换模组不会删除角色卡。
+
+默认模型为 `deepseek-v4-flash`，并显式声明 `1,000,000` token 上下文窗口：
+
+```dotenv
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_CONTEXT_WINDOW=1000000
+```
+
+应用不再设置“整个战役累计 token 上限”。供应商仍会限制单次请求的上下文长度，因此系统会永久保存
+完整对话，只把近期完整工具回合和与当前输入相关的旧回合送入模型。这样可持续推进长战役，同时避免破坏
+assistant/tool 消息配对。私有 PDF 内容会发送给所配置的模型供应商；使用第三方模型前应确认其数据政策。
+
 ## PDF 模组
 
 运行中可用以下 Keeper 命令：
@@ -141,6 +186,7 @@ CLI 内可使用 `/status`、`/players`、`/trace`、`/save [路径]` 和 `/help
 | M4 | 多人跑团 | 多角色状态、团队幸运、JSON 存档与恢复 | 已完成 |
 | M5 | 工程化 | 固定种子 eval、tracing、token/成本、输入安全、CLI | 已完成 |
 | M6 | PDF 模组 | 目录/分页切分、当前场景检索、顺序推进、存档与防剧透 | 已完成 |
+| M7 | 本地 WebUI | 永久角色卡、五组选卡、技能加点、模组库与独立战役 | 已完成 |
 
 详细的学习路线见 [`docs/learning-plan.md`](docs/learning-plan.md)，按代码阅读的建议见
 [`docs/learning-guide.md`](docs/learning-guide.md)，架构设计见 [`docs/design.md`](docs/design.md)。

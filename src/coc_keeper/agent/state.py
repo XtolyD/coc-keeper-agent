@@ -24,11 +24,13 @@ class Session:
     campaign_log: list[dict[str, Any]] = field(default_factory=list)
     insanity: InsanityTracker = field(default_factory=InsanityTracker)
     module: ModuleRuntime | None = None
+    character_id: str | None = None
+    module_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.players:
             self.players = {self.investigator.name: self.investigator}
-        elif self.investigator.name not in self.players:
+        else:
             self.players[self.investigator.name] = self.investigator
 
     def add_player(self, sheet: CharacterSheet) -> None:
@@ -70,6 +72,8 @@ class Session:
                 "temporary_hours": self.insanity.temporary_hours,
             },
             "module": self.module.to_dict() if self.module else None,
+            "character_id": self.character_id,
+            "module_id": self.module_id,
         }
 
     @classmethod
@@ -92,6 +96,7 @@ class Session:
             investigator=investigator, players=players, scene=str(data.get("scene", "")),
             campaign_log=list(data.get("campaign_log", [])), insanity=tracker,
             module=ModuleRuntime.from_dict(module_data) if module_data else None,
+            character_id=data.get("character_id"), module_id=data.get("module_id"),
         )
 
     def save(self, path: str | Path) -> Path:
