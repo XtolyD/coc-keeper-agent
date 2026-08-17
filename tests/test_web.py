@@ -74,3 +74,5 @@ def test_web_attribute_labels_are_bilingual():
     assert script.status_code == 200
     assert 'APP: "外貌"' in script.text
     assert 'return `${ATTRIBUTE_LABELS[name] || name} | ${name}`;' in script.text
+    assert "属性总和（含幸运）" in script.text
+    assert "属性总和（不含幸运）" in script.text

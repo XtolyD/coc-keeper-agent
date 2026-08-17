@@ -58,6 +58,11 @@ function attributeLabel(name) {
   return `${ATTRIBUTE_LABELS[name] || name} | ${name}`;
 }
 
+function attributeTotal(sheet, includeLuck = true) {
+  const names = Object.keys(ATTRIBUTE_LABELS).filter((name) => includeLuck || name !== "LUCK");
+  return names.reduce((total, name) => total + Number(sheet.attributes[name] || 0), 0);
+}
+
 function attributesHTML(sheet, names = ["STR", "CON", "DEX", "POW", "INT", "EDU"]) {
   return `<div class="stat-line">${names.map((name) => `<div class="stat"><span>${attributeLabel(name)}</span><strong>${esc(sheet.attributes[name])}</strong></div>`).join("")}</div>`;
 }
@@ -131,7 +136,7 @@ function candidateCard(candidate) {
   const bars = ["STR","CON","DEX","APP","POW","SIZ","INT","EDU","LUCK"].map((name) => `<div class="attribute-row"><span>${attributeLabel(name)}</span><span class="bar-track"><span class="bar-fill" style="width:${Math.min(100, sheet.attributes[name])}%"></span></span><strong>${sheet.attributes[name]}</strong></div>`).join("");
   return `<button class="candidate${state.selectedCandidate === candidate.index ? " selected" : ""}" type="button" data-index="${candidate.index}">
     <h3>候选 ${candidate.index + 1}</h3><div class="attribute-bars">${bars}</div>
-    <div class="derived-strip">HP ${esc(sheet.derived.HP)} · SAN ${esc(sheet.derived.SAN)}<br>DB ${esc(sheet.derived.DB)} · MOV ${esc(sheet.derived.MOV)}<br>兴趣点 ${candidate.interest_point_budget}</div>
+    <div class="derived-strip">HP ${esc(sheet.derived.HP)} · SAN ${esc(sheet.derived.SAN)}<br>DB ${esc(sheet.derived.DB)} · MOV ${esc(sheet.derived.MOV)}<br>属性总和（含幸运） ${attributeTotal(sheet)}<br>属性总和（不含幸运） ${attributeTotal(sheet, false)}</div>
   </button>`;
 }
 
