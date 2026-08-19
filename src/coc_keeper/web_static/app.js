@@ -20,6 +20,7 @@ const state = {
   selectedCandidate: null,
   occupationPreview: null,
   selectedOccupationSkills: [],
+  editingModule: null,
   navigationCollapsed: storedFlag("keeper-navigation-collapsed"),
   investigatorCollapsed: storedFlag("keeper-investigator-collapsed"),
 };
@@ -111,7 +112,7 @@ function renderCharacters() {
     return `<div class="collection-row">
       <div><div class="row-title">${esc(sheet.name)}</div><div class="row-meta">${esc(sheet.age)} 岁 · ${esc(sheet.occupation?.name || "旧版未设职业")} · 永久角色卡</div><div class="row-meta">职业 ${esc(record.occupation_points_spent)}/${esc(record.occupation_point_budget)} · 兴趣 ${esc(record.interest_points_spent)}/${esc(record.interest_point_budget)}</div></div>
       ${attributesHTML(sheet)}
-      <button class="button edit-skills" data-id="${record.id}" type="button">${icon("sliders-horizontal")}技能</button>
+      <div class="row-actions"><button class="button edit-skills" data-id="${record.id}" type="button">${icon("sliders-horizontal")}技能</button><button class="icon-button danger delete-character" data-id="${record.id}" data-name="${esc(sheet.name)}" type="button" aria-label="删除角色卡 ${esc(sheet.name)}" title="删除角色卡">${icon("trash-2")}</button></div>
     </div>`;
   }).join("");
   content.innerHTML = `<section class="page">
@@ -121,6 +122,18 @@ function renderCharacters() {
   document.querySelector("#new-character")?.addEventListener("click", openCharacterWizard);
   document.querySelector("#empty-new-character")?.addEventListener("click", openCharacterWizard);
   document.querySelectorAll(".edit-skills").forEach((button) => button.addEventListener("click", () => openSkillEditor(button.dataset.id)));
+  document.querySelectorAll(".delete-character").forEach((button) => button.addEventListener("click", () => deleteCharacter(button.dataset.id, button.dataset.name)));
+}
+
+async function deleteCharacter(id, name) {
+  if (!window.confirm(`确定永久删除角色卡「${name}」吗？此操作无法撤销。`)) return;
+  try {
+    await api(`/api/characters/${id}`, {method: "DELETE"});
+    state.characters = state.characters.filter((record) => record.id !== id);
+    renderCharacters();
+    refreshIcons();
+    notify("角色卡已删除");
+  } catch (error) { notify(error.message, true); }
 }
 
 function openCharacterWizard() {
@@ -315,12 +328,14 @@ function openSkillEditor(id) {
 }
 
 function renderModules() {
-  const rows = state.modules.map((item) => `<div class="collection-row module-row"><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.source_name)} · ${item.pages} 页</div></div><span class="context-badge">Keeper 私密</span></div>`).join("");
+  const rows = state.modules.map((item) => `<div class="collection-row module-row"><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.source_name)} · ${item.pages} 页</div></div><span class="context-badge">Keeper 私密</span><div class="row-actions"><button class="button edit-module" data-id="${item.id}" type="button">${icon("file-pen-line")}检查 / 编辑</button><button class="icon-button danger delete-module" data-id="${item.id}" data-title="${esc(item.title)}" type="button" aria-label="删除模组 ${esc(item.title)}" title="删除模组">${icon("trash-2")}</button></div></div>`).join("");
   content.innerHTML = `<section class="page"><header class="page-header"><h1>模组库</h1></header>
     <form class="upload-band" id="module-upload"><div class="field"><label for="module-title">模组名称</label><input id="module-title" name="title" placeholder="默认使用文件名"></div><div class="field"><label for="module-file">PDF 文件</label><input class="file-field" id="module-file" name="file" type="file" accept="application/pdf" required></div><button class="button primary" type="submit">${icon("upload")}导入模组</button></form>
     ${rows ? `<div class="collection">${rows}</div>` : `<div class="empty-state"><div>${icon("book-open-text")}<h2>模组库为空</h2></div></div>`}
   </section>`;
   document.querySelector("#module-upload").addEventListener("submit", uploadModule);
+  document.querySelectorAll(".edit-module").forEach((button) => button.addEventListener("click", () => openModuleEditor(button.dataset.id)));
+  document.querySelectorAll(".delete-module").forEach((button) => button.addEventListener("click", () => deleteModule(button.dataset.id, button.dataset.title)));
 }
 
 async function uploadModule(event) {
@@ -337,15 +352,102 @@ async function uploadModule(event) {
   finally { form.classList.remove("loading"); }
 }
 
+function moduleSectionEditorHTML(section, index) {
+  return `<details class="module-editor-section" data-index="${index}" ${index === 0 ? "open" : ""}><summary><span>${esc(section.keeper_title || section.id)}</span><span class="row-meta">第 ${esc(section.page_start)}-${esc(section.page_end)} 页</span></summary><div class="module-section-fields">
+    <div class="form-grid module-meta-grid"><div class="field"><label>场景 ID</label><input data-field="id" value="${esc(section.id)}" maxlength="100" required></div><div class="field"><label>Keeper 标题</label><input data-field="keeper_title" value="${esc(section.keeper_title)}" maxlength="200" required></div><div class="field"><label>玩家可见标题</label><input data-field="public_title" value="${esc(section.public_title)}" maxlength="200" required></div><div class="field"><label>起始页</label><input data-field="page_start" type="number" min="0" value="${esc(section.page_start)}" required></div><div class="field"><label>结束页</label><input data-field="page_end" type="number" min="0" value="${esc(section.page_end)}" required></div></div>
+    <div class="field"><label>Keeper 原文</label><textarea data-field="text" rows="10" required>${esc(section.text)}</textarea></div>
+    <div class="module-list-grid"><div class="field"><label>推进目标（每行一项）</label><textarea data-field="objectives" rows="4">${esc((section.objectives || []).join("\n"))}</textarea></div><div class="field"><label>显式秘密（每行一项）</label><textarea data-field="secrets" rows="4">${esc((section.secrets || []).join("\n"))}</textarea></div></div>
+    <div class="module-section-actions"><button class="button remove-module-section" data-index="${index}" type="button">${icon("trash-2")}删除场景</button></div>
+  </div></details>`;
+}
+
+function splitModuleLines(value) {
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function collectModuleEditor() {
+  return {
+    title: document.querySelector("#edit-module-title").value.trim(),
+    source_name: document.querySelector("#edit-module-source").value.trim(),
+    sections: [...document.querySelectorAll(".module-editor-section")].map((element) => ({
+      id: element.querySelector('[data-field="id"]').value.trim(),
+      keeper_title: element.querySelector('[data-field="keeper_title"]').value.trim(),
+      public_title: element.querySelector('[data-field="public_title"]').value.trim(),
+      page_start: Number(element.querySelector('[data-field="page_start"]').value),
+      page_end: Number(element.querySelector('[data-field="page_end"]').value),
+      text: element.querySelector('[data-field="text"]').value.trim(),
+      objectives: splitModuleLines(element.querySelector('[data-field="objectives"]').value),
+      secrets: splitModuleLines(element.querySelector('[data-field="secrets"]').value),
+    })),
+  };
+}
+
+function renderModuleEditor() {
+  const module = state.editingModule.module;
+  modalContent.innerHTML = `<form class="modal-body" id="module-editor"><h2 class="modal-title">检查与编辑模组</h2><div class="module-editor-notice">Keeper 私密内容 · 修改仅影响之后创建的战役</div><div class="form-grid module-header-grid"><div class="field"><label for="edit-module-title">模组名称</label><input id="edit-module-title" value="${esc(module.title)}" maxlength="200" required></div><div class="field"><label for="edit-module-source">来源文件</label><input id="edit-module-source" value="${esc(module.source_name)}" maxlength="260"></div></div><div class="module-editor-toolbar"><strong>场景内容</strong><button class="button" id="add-module-section" type="button">${icon("plus")}添加场景</button></div><div class="module-sections">${module.sections.map(moduleSectionEditorHTML).join("")}</div><div class="form-footer"><button class="button primary" type="submit">${icon("save")}保存模组</button></div></form>`;
+  refreshIcons();
+  document.querySelector("#module-editor").addEventListener("submit", saveModuleEditor);
+  document.querySelector("#add-module-section").addEventListener("click", () => {
+    const current = collectModuleEditor();
+    const used = new Set(current.sections.map((section) => section.id));
+    let number = current.sections.length + 1;
+    while (used.has(`scene-${String(number).padStart(3, "0")}`)) number += 1;
+    current.sections.push({id: `scene-${String(number).padStart(3, "0")}`, keeper_title: "新场景", public_title: "当前场景", page_start: 0, page_end: 0, text: "待补充", objectives: [], secrets: []});
+    state.editingModule.module = {...state.editingModule.module, ...current};
+    renderModuleEditor();
+  });
+  document.querySelectorAll(".remove-module-section").forEach((button) => button.addEventListener("click", () => {
+    const current = collectModuleEditor();
+    if (current.sections.length === 1) { notify("模组至少需要一个场景", true); return; }
+    current.sections.splice(Number(button.dataset.index), 1);
+    state.editingModule.module = {...state.editingModule.module, ...current};
+    renderModuleEditor();
+  }));
+}
+
+async function openModuleEditor(id) {
+  try {
+    state.editingModule = await api(`/api/modules/${id}`);
+    renderModuleEditor();
+    modal.showModal();
+  } catch (error) { notify(error.message, true); }
+}
+
+async function saveModuleEditor(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = collectModuleEditor();
+  form.classList.add("loading");
+  try {
+    await api(`/api/modules/${state.editingModule.id}`, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+    state.editingModule = null;
+    modal.close();
+    await loadModules();
+    notify("模组已保存");
+  } catch (error) { notify(error.message, true); form.classList.remove("loading"); }
+}
+
+async function deleteModule(id, title) {
+  if (!window.confirm(`确定永久删除模组「${title}」吗？该 Keeper 私密内容将无法恢复。`)) return;
+  try {
+    await api(`/api/modules/${id}`, {method: "DELETE"});
+    state.modules = state.modules.filter((item) => item.id !== id);
+    renderModules();
+    refreshIcons();
+    notify("模组已删除");
+  } catch (error) { notify(error.message, true); }
+}
+
 function renderGames() {
   const canCreate = state.characters.length && state.modules.length;
-  const rows = state.games.map((game) => `<div class="collection-row"><div><div class="row-title">${esc(game.title)}</div><div class="row-meta">${esc(game.character.name)} · ${esc(game.module?.module || "无模组")}</div></div><span class="context-badge">进行中</span><button class="button secondary open-game" data-id="${game.id}" type="button">${icon("play")}继续</button></div>`).join("");
+  const rows = state.games.map((game) => `<div class="collection-row"><div><div class="row-title">${esc(game.title)}</div><div class="row-meta">${esc(game.character.name)} · ${esc(game.module?.module || "无模组")}</div></div><span class="context-badge">进行中</span><div class="row-actions"><button class="button secondary open-game" data-id="${game.id}" type="button">${icon("play")}继续</button><button class="icon-button danger delete-game" data-id="${game.id}" data-title="${esc(game.title)}" type="button" aria-label="删除战役 ${esc(game.title)}" title="删除战役">${icon("trash-2")}</button></div></div>`).join("");
   content.innerHTML = `<section class="page"><header class="page-header"><h1>战役</h1></header>
     <form class="new-game-band" id="new-game"><div class="field"><label for="game-character">角色卡</label><select id="game-character" name="character_id" required><option value="">选择角色</option>${state.characters.map((record) => `<option value="${record.id}">${esc(record.sheet.name)}</option>`).join("")}</select></div><div class="field"><label for="game-module">模组</label><select id="game-module" name="module_id" required><option value="">选择模组</option>${state.modules.map((item) => `<option value="${item.id}">${esc(item.title)}</option>`).join("")}</select></div><button class="button primary" type="submit" ${canCreate ? "" : "disabled"}>${icon("plus")}创建战役</button><div class="field"><label for="game-title">战役名称</label><input id="game-title" name="title" value="新战役" maxlength="80"></div></form>
     ${rows ? `<div class="collection">${rows}</div>` : `<div class="empty-state"><div>${icon("messages-square")}<h2>暂无战役</h2></div></div>`}
   </section>`;
   document.querySelector("#new-game").addEventListener("submit", createGame);
   document.querySelectorAll(".open-game").forEach((button) => button.addEventListener("click", () => openGame(button.dataset.id)));
+  document.querySelectorAll(".delete-game").forEach((button) => button.addEventListener("click", () => deleteGame(button.dataset.id, button.dataset.title)));
 }
 
 async function createGame(event) {
@@ -362,6 +464,17 @@ async function createGame(event) {
 async function openGame(id) {
   try { state.activeGame = await api(`/api/games/${id}`); render(); }
   catch (error) { notify(error.message, true); }
+}
+
+async function deleteGame(id, title) {
+  if (!window.confirm(`确定永久删除战役「${title}」吗？角色卡和模组不会被删除。`)) return;
+  try {
+    await api(`/api/games/${id}`, {method: "DELETE"});
+    state.games = state.games.filter((game) => game.id !== id);
+    renderGames();
+    refreshIcons();
+    notify("战役已删除");
+  } catch (error) { notify(error.message, true); }
 }
 
 function renderGame() {

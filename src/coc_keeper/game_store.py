@@ -103,6 +103,12 @@ class GameStore:
             raise FileNotFoundError(f"战役不存在: {game_id}")
         return GameRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
+    def delete(self, game_id: str) -> None:
+        path = self._path(game_id)
+        if not path.exists():
+            raise FileNotFoundError(f"战役不存在: {game_id}")
+        path.unlink()
+
     def list(self) -> list[GameRecord]:
         records: list[GameRecord] = []
         for path in self.root.glob("*.json"):

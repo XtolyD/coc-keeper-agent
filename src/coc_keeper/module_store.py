@@ -68,6 +68,18 @@ class ModuleStore:
             raise FileNotFoundError(f"模组不存在: {module_id}")
         return ModuleRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
+    def save(self, module_id: str, module: KeeperModule) -> ModuleRecord:
+        current = self.get(module_id)
+        current.module = module
+        self._write(self._path(module_id), current.to_dict())
+        return current
+
+    def delete(self, module_id: str) -> None:
+        path = self._path(module_id)
+        if not path.exists():
+            raise FileNotFoundError(f"模组不存在: {module_id}")
+        path.unlink()
+
     def list(self) -> list[ModuleRecord]:
         records: list[ModuleRecord] = []
         for path in self.root.glob("*.json"):

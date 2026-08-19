@@ -26,13 +26,15 @@ def make_agent(responses):
 
 def test_agent_tool_loop_roundtrip():
     agent = make_agent([
-        LLMResponse(tool_calls=[{"id": "call-1", "name": "get_character", "arguments": "{}"}], usage={"total_tokens": 5}),
+        LLMResponse(reasoning_content="先读取角色卡。", tool_calls=[{"id": "call-1", "name": "get_character", "arguments": "{}"}], usage={"total_tokens": 5}),
         LLMResponse(content="角色卡已经确认。门外传来脚步声，你怎么办？", usage={"total_tokens": 5}),
     ])
     reply = agent.respond("查看角色卡")
     assert "脚步声" in reply
     second_messages = agent.llm.calls[1][0]
     assert any(message["role"] == "tool" and message["tool_call_id"] == "call-1" for message in second_messages)
+    tool_request = next(message for message in second_messages if message.get("tool_calls"))
+    assert tool_request["reasoning_content"] == "先读取角色卡。"
     assert agent.tracer.summary()["llm_calls"] == 2
     assert agent.tracer.summary()["tool_calls"] == 1
 
@@ -65,10 +67,10 @@ def test_agent_automatically_checks_unambiguous_player_action():
     reply = agent.respond("我想打晕NPC")
     assert reply.startswith("【检定 · 格斗（斗殴）】")
     messages = agent.llm.calls[0][0]
-    tool_call = next(message for message in messages if message["role"] == "assistant" and message.get("tool_calls"))
-    assert tool_call["tool_calls"][0]["function"]["name"] == "roll_skill_check"
-    tool_result = next(message for message in messages if message["role"] == "tool")
-    assert "格斗（斗殴）" in tool_result["content"]
+    assert not any(message.get("tool_calls") for message in messages)
+    assert not any(message["role"] == "tool" for message in messages)
+    assert "本轮已执行的行动检定" in messages[0]["content"]
+    assert "格斗（斗殴）" in messages[0]["content"]
 
 
 def test_action_skill_mapping_covers_stealth():

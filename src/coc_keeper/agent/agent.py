@@ -10,12 +10,11 @@
 """
 from __future__ import annotations
 
-import random
 import json
-from uuid import uuid4
+import random
 
 from ..config import Settings
-from .llm import LLMClient, LLMResponse
+from .llm import LLMClient
 from .memory import Memory
 from .observability import TraceRecorder
 from .prompts import KP_SYSTEM_PROMPT, build_system_prompt, infer_action_skill
@@ -50,12 +49,15 @@ class KeeperAgent:
     def _record_llm(self, resp) -> None:
         self.tracer.record_llm(self.settings.model, resp.usage, resp.latency_ms)
 
-    def _refresh_system_prompt(self) -> None:
+    def _refresh_system_prompt(self, action_check: dict | None = None) -> None:
         prompt = build_system_prompt(self._prompt_base, self.session.investigator)
         if self.session.module:
             context = self.session.module.keeper_context(max_chars=8000)
             prompt += "\n\n## 当前模组 Keeper 专用上下文（绝不可向玩家逐字展示）\n"
             prompt += json.dumps(context, ensure_ascii=False, indent=2)
+        if action_check is not None:
+            prompt += "\n\n## 本轮已执行的行动检定（直接依据结果叙述，不得重复检定）\n"
+            prompt += json.dumps(action_check, ensure_ascii=False, indent=2)
         self.memory.system_prompt = prompt
 
     def _apply_spoiler_gate(self, resp) -> None:
@@ -66,14 +68,7 @@ class KeeperAgent:
         skill = infer_action_skill(user_input)
         if skill is None:
             return None
-        call_id = f"action-check-{uuid4().hex}"
-        arguments = json.dumps({"skill": skill}, ensure_ascii=False)
-        self.memory.add_assistant(LLMResponse(tool_calls=[{
-            "id": call_id, "name": "roll_skill_check", "arguments": arguments,
-        }]))
-        result = self.dispatch("roll_skill_check", arguments)
-        self.memory.add_tool_result(call_id, result)
-        return result
+        return self.dispatch("roll_skill_check", {"skill": skill})
 
     @staticmethod
     def _check_summary(tool_name: str, result: dict) -> str | None:
@@ -115,7 +110,7 @@ class KeeperAgent:
         if required_check is not None:
             visible_checks.append(("roll_skill_check", required_check))
         for _ in range(self.settings.max_steps):
-            self._refresh_system_prompt()
+            self._refresh_system_prompt(required_check)
             resp = self.llm.chat(self.memory.messages(), tools=TOOLS_SCHEMA)
             self._record_llm(resp)
             self._apply_spoiler_gate(resp)
@@ -131,7 +126,7 @@ class KeeperAgent:
             self.memory.add_assistant(resp)
             return resp.content
         # 超过循环上限：让模型在无工具的情况下给出收尾叙述
-        self._refresh_system_prompt()
+        self._refresh_system_prompt(required_check)
         last = self.llm.chat(self.memory.messages())
         self._record_llm(last)
         self._apply_spoiler_gate(last)

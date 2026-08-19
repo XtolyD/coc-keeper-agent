@@ -32,3 +32,11 @@ def test_full_transcript_persists_and_old_turns_are_retrievable(tmp_path):
     loaded = store.get(record.id)
     assert len(loaded.transcript) == 12
     assert loaded.relevant_history("钟楼")
+
+
+def test_game_can_be_deleted_without_touching_references(tmp_path):
+    store = GameStore(tmp_path / "games")
+    session = Session(character_id="a" * 32, module_id="b" * 32)
+    record = store.create("待删除战役", session.character_id, session.module_id, session)
+    store.delete(record.id)
+    assert store.list() == []

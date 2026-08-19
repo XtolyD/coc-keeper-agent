@@ -15,6 +15,7 @@ from ..config import Settings
 class LLMResponse:
     """一次 LLM 调用的结果。"""
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
     tool_calls: list[dict] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
     latency_ms: float = 0.0
@@ -59,8 +60,12 @@ class LLMClient:
         latency_ms = (perf_counter() - started) * 1000
         msg = resp.choices[0].message
         usage = getattr(resp, "usage", None)
+        reasoning_content = getattr(msg, "reasoning_content", None)
+        if reasoning_content is None:
+            reasoning_content = (getattr(msg, "model_extra", None) or {}).get("reasoning_content")
         return LLMResponse(
             content=msg.content,
+            reasoning_content=reasoning_content,
             tool_calls=[
                 {
                     "id": tc.id,

@@ -17,7 +17,9 @@ def make_pdf() -> bytes:
 def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
     client = TestClient(web.app)
-    assert client.get("/").status_code == 200
+    index_response = client.get("/")
+    assert index_response.status_code == 200
+    assert index_response.headers["cache-control"] == "no-store"
 
     draft_response = client.post("/api/character-drafts", json={"name": "周晴", "age": 27})
     assert draft_response.status_code == 200
@@ -51,6 +53,16 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     module = module_response.json()
     assert "sections" not in module
 
+    detail_response = client.get(f"/api/modules/{module['id']}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["module"]["sections"]
+    detail["module"]["title"] = "修订后的测试模组"
+    detail["module"]["sections"][0]["public_title"] = "旧宅门前"
+    update_response = client.put(f"/api/modules/{module['id']}", json=detail["module"])
+    assert update_response.status_code == 200
+    assert update_response.json()["module"]["title"] == "修订后的测试模组"
+
     game_response = client.post("/api/games", json={
         "title": "测试战役", "character_id": character["id"], "module_id": module["id"],
     })
@@ -59,9 +71,21 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     assert game["character_id"] == character["id"]
     assert game["module_id"] == module["id"]
     assert game["character"]["name"] == "周晴"
-    assert game["module"]["module"] == "测试模组"
+    assert game["module"]["module"] == "修订后的测试模组"
     assert "scene" not in game["module"]
     assert "progress" not in game["module"]
+
+    assert client.delete(f"/api/characters/{character['id']}").status_code == 409
+    assert client.delete(f"/api/modules/{module['id']}").status_code == 409
+
+    delete_response = client.delete(f"/api/games/{game['id']}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+    assert client.get(f"/api/games/{game['id']}").status_code == 404
+    assert client.delete(f"/api/characters/{character['id']}").json()["deleted"] is True
+    assert client.delete(f"/api/modules/{module['id']}").json()["deleted"] is True
+    assert client.get("/api/characters").json() == []
+    assert client.get("/api/modules").json() == []
 
 
 def test_web_status_declares_context_window(tmp_path, monkeypatch):
@@ -74,8 +98,8 @@ def test_web_status_declares_context_window(tmp_path, monkeypatch):
 def test_web_attribute_labels_are_bilingual():
     client = TestClient(web.app)
     page = client.get("/").text
-    assert "/assets/app.js?v=1.3.0" in page
-    assert "/assets/styles.css?v=1.3.0" in page
+    assert "/assets/app.js?v=1.4.0" in page
+    assert "/assets/styles.css?v=1.4.0" in page
     assert 'id="sidebar-toggle"' in page
     script = client.get("/assets/app.js")
     assert script.status_code == 200
@@ -86,3 +110,8 @@ def test_web_attribute_labels_are_bilingual():
     assert 'id="investigator-toggle"' in script.text
     assert "game.module?.progress" not in script.text
     assert "item.sections" not in script.text
+    assert 'class="icon-button danger delete-game"' in script.text
+    assert 'class="icon-button danger delete-character"' in script.text
+    assert 'class="icon-button danger delete-module"' in script.text
+    assert "检查 / 编辑" in script.text
+    assert 'method: "DELETE"' in script.text

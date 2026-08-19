@@ -63,6 +63,11 @@ class Settings:
     def is_configured(self) -> bool:
         return bool(self.model and self.base_url and self.api_key)
 
+    @property
+    def requires_reasoning_content(self) -> bool:
+        """DeepSeek 思考模式的工具回合必须原样回传 reasoning_content。"""
+        return "deepseek" in f"{self.model} {self.base_url}".lower()
+
     def describe(self) -> str:
         """返回不包含密钥的模型摘要，用于日志展示。"""
         return f"model={self.model} context_window={self.context_window} base_url={self.base_url}"

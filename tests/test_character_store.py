@@ -41,3 +41,5 @@ def test_character_store_is_permanent(tmp_path):
     restored.sheet.hp -= 2
     store.save(restored.id, restored.sheet)
     assert store.get(restored.id).sheet.hp == restored.sheet.hp
+    store.delete(restored.id)
+    assert store.list() == []

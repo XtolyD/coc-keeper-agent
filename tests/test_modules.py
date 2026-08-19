@@ -5,6 +5,7 @@ import pytest
 from coc_keeper.modules import (
     KeeperModule, ModuleRuntime, ModuleSection, PDFModuleImporter,
 )
+from coc_keeper.module_store import ModuleStore
 
 
 def build_pdf(path, pages, toc=None):
@@ -73,3 +74,15 @@ def test_scanned_pdf_requires_ocr(tmp_path):
     build_pdf(path, [""])
     with pytest.raises(ValueError, match="OCR"):
         PDFModuleImporter().import_pdf(path)
+
+
+def test_module_store_can_update_and_delete(tmp_path):
+    store = ModuleStore(tmp_path / "modules")
+    record = store.add(make_runtime().module)
+    updated = KeeperModule("修订模组", "revised.pdf", [
+        ModuleSection("scene-new", "修订场景", "当前地点", 3, 4, "修订后的 Keeper 原文。"),
+    ])
+    store.save(record.id, updated)
+    assert store.get(record.id).module.title == "修订模组"
+    store.delete(record.id)
+    assert store.list() == []

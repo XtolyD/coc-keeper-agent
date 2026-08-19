@@ -95,6 +95,12 @@ class CharacterStore:
         self._write(self._path(record_id), current.to_dict())
         return current
 
+    def delete(self, record_id: str) -> None:
+        path = self._path(record_id)
+        if not path.exists():
+            raise FileNotFoundError(f"角色卡不存在: {record_id}")
+        path.unlink()
+
     def list(self) -> list[CharacterRecord]:
         records: list[CharacterRecord] = []
         for path in self.root.glob("*.json"):

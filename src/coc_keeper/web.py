@@ -27,7 +27,7 @@ from .character_store import CharacterStore
 from .config import PROJECT_ROOT, Settings
 from .game_store import GameRecord, GameStore, TranscriptEntry
 from .module_store import ModuleStore
-from .modules import ModuleRuntime
+from .modules import KeeperModule, ModuleRuntime, ModuleSection
 from .occupations import (
     get_occupation, interest_point_budget, list_occupations,
 )
@@ -57,6 +57,23 @@ class SkillUpdateRequest(BaseModel):
 class ModulePathRequest(BaseModel):
     path: str
     title: str | None = None
+
+
+class ModuleSectionUpdate(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    keeper_title: str = Field(min_length=1, max_length=200)
+    public_title: str = Field(default="当前场景", min_length=1, max_length=200)
+    page_start: int = Field(default=0, ge=0)
+    page_end: int = Field(default=0, ge=0)
+    text: str = Field(min_length=1)
+    objectives: list[str] = Field(default_factory=list)
+    secrets: list[str] = Field(default_factory=list)
+
+
+class ModuleUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    source_name: str = Field(default="", max_length=260)
+    sections: list[ModuleSectionUpdate] = Field(min_length=1)
 
 
 class GameCreateRequest(BaseModel):
@@ -92,6 +109,21 @@ class WebService:
         return {key: summary[key] for key in ("id", "title", "source_name", "pages", "created_at")}
 
     @staticmethod
+    def module_detail_payload(record) -> dict[str, Any]:
+        return {
+            "id": record.id,
+            "created_at": record.created_at,
+            "module": record.module.to_dict(),
+        }
+
+    def referencing_games(self, *, character_id: str | None = None, module_id: str | None = None) -> list[GameRecord]:
+        return [
+            record for record in self.games.list()
+            if (character_id is None or record.character_id == character_id)
+            and (module_id is None or record.module_id == module_id)
+        ]
+
+    @staticmethod
     def game_payload(record: GameRecord, *, include_transcript: bool = True) -> dict[str, Any]:
         payload = {
             "id": record.id, "title": record.title,
@@ -106,7 +138,7 @@ class WebService:
 
 
 service = WebService()
-app = FastAPI(title="CoC Keeper", version="1.3.0")
+app = FastAPI(title="CoC Keeper", version="1.4.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -125,7 +157,7 @@ async def value_error_handler(_, exc: ValueError):
 
 @app.get("/")
 def index():
-    return FileResponse(static_root / "index.html")
+    return FileResponse(static_root / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -200,6 +232,18 @@ def update_character_skills(character_id: str, request: SkillUpdateRequest):
     return service.character_payload(service.characters.save(character_id, record.sheet))
 
 
+@app.delete("/api/characters/{character_id}")
+def delete_character(character_id: str):
+    record = service.characters.get(character_id)
+    games = service.referencing_games(character_id=character_id)
+    if games:
+        titles = "、".join(game.title for game in games[:3])
+        suffix = "等" if len(games) > 3 else ""
+        raise HTTPException(status_code=409, detail=f"角色卡正被战役「{titles}」{suffix}使用，请先删除这些战役")
+    service.characters.delete(character_id)
+    return {"id": record.id, "name": record.sheet.name, "deleted": True}
+
+
 @app.get("/api/character-drafts/{draft_id}/candidates/{candidate_index}/occupations/{occupation_id}")
 def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
     candidates = service.drafts.get(draft_id)
@@ -218,6 +262,49 @@ def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
 @app.get("/api/modules")
 def list_modules():
     return [service.module_payload(record) for record in service.modules.list()]
+
+
+@app.get("/api/modules/{module_id}")
+def get_module(module_id: str):
+    return service.module_detail_payload(service.modules.get(module_id))
+
+
+@app.put("/api/modules/{module_id}")
+def update_module(module_id: str, request: ModuleUpdateRequest):
+    section_ids = [section.id.strip() for section in request.sections]
+    if not request.title.strip():
+        raise HTTPException(status_code=400, detail="模组名称不能为空")
+    if any(not section_id for section_id in section_ids):
+        raise HTTPException(status_code=400, detail="场景 ID 不能为空")
+    if len(section_ids) != len(set(section_ids)):
+        raise HTTPException(status_code=400, detail="场景 ID 不能重复")
+    sections: list[ModuleSection] = []
+    for item in request.sections:
+        if not item.keeper_title.strip() or not item.public_title.strip() or not item.text.strip():
+            raise HTTPException(status_code=400, detail=f"场景 {item.id} 的标题和原文不能为空")
+        if item.page_end < item.page_start:
+            raise HTTPException(status_code=400, detail=f"场景 {item.id} 的结束页不能小于起始页")
+        sections.append(ModuleSection(
+            id=item.id.strip(), keeper_title=item.keeper_title.strip(),
+            public_title=item.public_title.strip(), page_start=item.page_start,
+            page_end=item.page_end, text=item.text.strip(),
+            objectives=[value.strip() for value in item.objectives if value.strip()],
+            secrets=[value.strip() for value in item.secrets if value.strip()],
+        ))
+    module = KeeperModule(request.title.strip(), request.source_name.strip(), sections)
+    return service.module_detail_payload(service.modules.save(module_id, module))
+
+
+@app.delete("/api/modules/{module_id}")
+def delete_module(module_id: str):
+    record = service.modules.get(module_id)
+    games = service.referencing_games(module_id=module_id)
+    if games:
+        titles = "、".join(game.title for game in games[:3])
+        suffix = "等" if len(games) > 3 else ""
+        raise HTTPException(status_code=409, detail=f"模组正被战役「{titles}」{suffix}使用，请先删除这些战役")
+    service.modules.delete(module_id)
+    return {"id": record.id, "title": record.module.title, "deleted": True}
 
 
 @app.post("/api/modules/path")
@@ -264,6 +351,14 @@ def get_game(game_id: str):
     return service.game_payload(service.games.get(game_id))
 
 
+@app.delete("/api/games/{game_id}")
+def delete_game(game_id: str):
+    with service.lock(game_id):
+        record = service.games.get(game_id)
+        service.games.delete(game_id)
+    return {"id": record.id, "title": record.title, "deleted": True}
+
+
 @app.post("/api/games/{game_id}/messages")
 def send_message(game_id: str, request: MessageRequest):
     with service.lock(game_id):
@@ -276,7 +371,10 @@ def send_message(game_id: str, request: MessageRequest):
         if not settings.is_configured:
             raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API")
         agent = KeeperAgent(record.session, settings, system_prompt=prompt)
-        agent.memory.restore(record.memory)
+        agent.memory.restore(
+            record.memory,
+            require_reasoning_content=settings.requires_reasoning_content,
+        )
         try:
             reply = agent.respond(request.content)
         except Exception as exc:  # noqa: BLE001 - 转换为前端可处理的网关错误
