@@ -87,6 +87,11 @@ class WebService:
         return record.to_dict()
 
     @staticmethod
+    def module_payload(record) -> dict[str, Any]:
+        summary = record.summary()
+        return {key: summary[key] for key in ("id", "title", "source_name", "pages", "created_at")}
+
+    @staticmethod
     def game_payload(record: GameRecord, *, include_transcript: bool = True) -> dict[str, Any]:
         payload = {
             "id": record.id, "title": record.title,
@@ -101,7 +106,7 @@ class WebService:
 
 
 service = WebService()
-app = FastAPI(title="CoC Keeper", version="1.2.0")
+app = FastAPI(title="CoC Keeper", version="1.3.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -212,12 +217,12 @@ def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
 
 @app.get("/api/modules")
 def list_modules():
-    return [record.summary() for record in service.modules.list()]
+    return [service.module_payload(record) for record in service.modules.list()]
 
 
 @app.post("/api/modules/path")
 def import_module_path(request: ModulePathRequest):
-    return service.modules.import_pdf(request.path, title=request.title).summary()
+    return service.module_payload(service.modules.import_pdf(request.path, title=request.title))
 
 
 @app.post("/api/modules/upload")
@@ -231,7 +236,7 @@ async def upload_module(file: UploadFile = File(...), title: str | None = Form(d
         temporary.write(content)
         temp_path = Path(temporary.name)
     try:
-        return service.modules.import_pdf(temp_path, title=title or Path(file.filename).stem).summary()
+        return service.module_payload(service.modules.import_pdf(temp_path, title=title or Path(file.filename).stem))
     finally:
         temp_path.unlink(missing_ok=True)
 

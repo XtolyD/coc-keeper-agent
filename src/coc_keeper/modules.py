@@ -108,7 +108,7 @@ class PDFModuleImporter:
                 continue
             sections.append(ModuleSection(
                 id=f"scene-{index:03d}", keeper_title=keeper_title,
-                public_title=f"场景 {index}", page_start=start, page_end=end, text=text,
+                public_title="当前场景", page_start=start, page_end=end, text=text,
             ))
         if not sections:
             raise ValueError("PDF 中没有可用的文本场景")
@@ -165,15 +165,16 @@ class ModuleRuntime:
         return self.current_index >= len(self.module.sections) - 1 and self.current.id in self.completed
 
     def status(self, *, player_safe: bool = True) -> dict[str, Any]:
-        result = {
+        if player_safe:
+            return {"module": self.module.title}
+        return {
             "module": self.module.title,
-            "scene": self.current.public_title if player_safe else self.current.keeper_title,
+            "scene": self.current.keeper_title,
             "progress": f"{self.current_index + 1}/{len(self.module.sections)}",
             "finished": self.finished,
+            "pages": [self.current.page_start, self.current.page_end],
+            "objectives": self.current.objectives,
         }
-        if not player_safe:
-            result.update({"pages": [self.current.page_start, self.current.page_end], "objectives": self.current.objectives})
-        return result
 
     def keeper_context(self, query: str = "", *, limit: int = 3, max_chars: int = 8000) -> dict[str, Any]:
         """只返回当前场景内容，绝不检索未来场景。"""

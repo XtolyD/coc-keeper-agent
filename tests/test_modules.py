@@ -48,6 +48,7 @@ def make_runtime():
 
 def test_runtime_hides_future_and_enforces_order():
     runtime = make_runtime()
+    assert runtime.status(player_safe=True) == {"module": "测试模组"}
     context = runtime.keeper_context("镇长")
     serialized = str(context)
     assert "生锈钥匙" in serialized

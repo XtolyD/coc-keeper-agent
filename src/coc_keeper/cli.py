@@ -69,7 +69,7 @@ def _handle_command(command: str, session: Session, agent: KeeperAgent, autosave
             session.module = load_module(value)
             manifest = Path("data") / "modules" / f"{Path(value).stem}.json"
             session.module.module.save(manifest)
-            print(f"已加载模组《{session.module.module.title}》，共 {len(session.module.module.sections)} 个场景。")
+            print(f"已加载模组《{session.module.module.title}》。")
             print(f"可编辑场景清单：{manifest.resolve()}")
         elif action == "status":
             print(json.dumps(session.module.status(player_safe=True) if session.module else {"loaded": False}, ensure_ascii=False, indent=2))

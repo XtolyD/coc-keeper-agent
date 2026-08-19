@@ -49,6 +49,7 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     )
     assert module_response.status_code == 200
     module = module_response.json()
+    assert "sections" not in module
 
     game_response = client.post("/api/games", json={
         "title": "测试战役", "character_id": character["id"], "module_id": module["id"],
@@ -59,6 +60,8 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     assert game["module_id"] == module["id"]
     assert game["character"]["name"] == "周晴"
     assert game["module"]["module"] == "测试模组"
+    assert "scene" not in game["module"]
+    assert "progress" not in game["module"]
 
 
 def test_web_status_declares_context_window(tmp_path, monkeypatch):
@@ -70,10 +73,16 @@ def test_web_status_declares_context_window(tmp_path, monkeypatch):
 
 def test_web_attribute_labels_are_bilingual():
     client = TestClient(web.app)
-    assert "/assets/app.js?v=1.2.1" in client.get("/").text
+    page = client.get("/").text
+    assert "/assets/app.js?v=1.3.0" in page
+    assert "/assets/styles.css?v=1.3.0" in page
+    assert 'id="sidebar-toggle"' in page
     script = client.get("/assets/app.js")
     assert script.status_code == 200
     assert 'APP: "外貌"' in script.text
     assert 'return `${ATTRIBUTE_LABELS[name] || name} | ${name}`;' in script.text
     assert "属性总和（含幸运）" in script.text
     assert "属性总和（不含幸运）" in script.text
+    assert 'id="investigator-toggle"' in script.text
+    assert "game.module?.progress" not in script.text
+    assert "item.sections" not in script.text

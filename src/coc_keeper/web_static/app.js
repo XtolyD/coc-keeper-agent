@@ -1,3 +1,13 @@
+function storedFlag(key) {
+  try { return localStorage.getItem(key) === "true"; }
+  catch (_) { return false; }
+}
+
+function storeFlag(key, value) {
+  try { localStorage.setItem(key, String(value)); }
+  catch (_) { /* Preferences remain available for the current page. */ }
+}
+
 const state = {
   view: "characters",
   status: null,
@@ -10,6 +20,8 @@ const state = {
   selectedCandidate: null,
   occupationPreview: null,
   selectedOccupationSkills: [],
+  navigationCollapsed: storedFlag("keeper-navigation-collapsed"),
+  investigatorCollapsed: storedFlag("keeper-investigator-collapsed"),
 };
 
 const content = document.querySelector("#content");
@@ -65,6 +77,17 @@ function attributeTotal(sheet, includeLuck = true) {
 
 function attributesHTML(sheet, names = ["STR", "CON", "DEX", "POW", "INT", "EDU"]) {
   return `<div class="stat-line">${names.map((name) => `<div class="stat"><span>${attributeLabel(name)}</span><strong>${esc(sheet.attributes[name])}</strong></div>`).join("")}</div>`;
+}
+
+function renderNavigationState() {
+  const shell = document.querySelector(".app-shell");
+  const toggle = document.querySelector("#sidebar-toggle");
+  shell.classList.toggle("sidebar-collapsed", state.navigationCollapsed);
+  toggle.setAttribute("aria-expanded", String(!state.navigationCollapsed));
+  toggle.setAttribute("aria-label", state.navigationCollapsed ? "展开主导航" : "收起主导航");
+  toggle.title = state.navigationCollapsed ? "展开主导航" : "收起主导航";
+  toggle.innerHTML = icon(state.navigationCollapsed ? "panel-left-open" : "panel-left-close");
+  refreshIcons();
 }
 
 function setView(view) {
@@ -292,7 +315,7 @@ function openSkillEditor(id) {
 }
 
 function renderModules() {
-  const rows = state.modules.map((item) => `<div class="collection-row"><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.source_name)} · ${item.pages} 页</div></div><div class="row-meta">${item.sections} 个场景</div><span class="context-badge">Keeper 私密</span></div>`).join("");
+  const rows = state.modules.map((item) => `<div class="collection-row module-row"><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.source_name)} · ${item.pages} 页</div></div><span class="context-badge">Keeper 私密</span></div>`).join("");
   content.innerHTML = `<section class="page"><header class="page-header"><h1>模组库</h1></header>
     <form class="upload-band" id="module-upload"><div class="field"><label for="module-title">模组名称</label><input id="module-title" name="title" placeholder="默认使用文件名"></div><div class="field"><label for="module-file">PDF 文件</label><input class="file-field" id="module-file" name="file" type="file" accept="application/pdf" required></div><button class="button primary" type="submit">${icon("upload")}导入模组</button></form>
     ${rows ? `<div class="collection">${rows}</div>` : `<div class="empty-state"><div>${icon("book-open-text")}<h2>模组库为空</h2></div></div>`}
@@ -316,7 +339,7 @@ async function uploadModule(event) {
 
 function renderGames() {
   const canCreate = state.characters.length && state.modules.length;
-  const rows = state.games.map((game) => `<div class="collection-row"><div><div class="row-title">${esc(game.title)}</div><div class="row-meta">${esc(game.character.name)} · ${esc(game.module?.module || "无模组")}</div></div><div class="row-meta">${esc(game.module?.scene || "未开始")} · ${esc(game.module?.progress || "-")}</div><button class="button secondary open-game" data-id="${game.id}" type="button">${icon("play")}继续</button></div>`).join("");
+  const rows = state.games.map((game) => `<div class="collection-row"><div><div class="row-title">${esc(game.title)}</div><div class="row-meta">${esc(game.character.name)} · ${esc(game.module?.module || "无模组")}</div></div><span class="context-badge">进行中</span><button class="button secondary open-game" data-id="${game.id}" type="button">${icon("play")}继续</button></div>`).join("");
   content.innerHTML = `<section class="page"><header class="page-header"><h1>战役</h1></header>
     <form class="new-game-band" id="new-game"><div class="field"><label for="game-character">角色卡</label><select id="game-character" name="character_id" required><option value="">选择角色</option>${state.characters.map((record) => `<option value="${record.id}">${esc(record.sheet.name)}</option>`).join("")}</select></div><div class="field"><label for="game-module">模组</label><select id="game-module" name="module_id" required><option value="">选择模组</option>${state.modules.map((item) => `<option value="${item.id}">${esc(item.title)}</option>`).join("")}</select></div><button class="button primary" type="submit" ${canCreate ? "" : "disabled"}>${icon("plus")}创建战役</button><div class="field"><label for="game-title">战役名称</label><input id="game-title" name="title" value="新战役" maxlength="80"></div></form>
     ${rows ? `<div class="collection">${rows}</div>` : `<div class="empty-state"><div>${icon("messages-square")}<h2>暂无战役</h2></div></div>`}
@@ -346,17 +369,21 @@ function renderGame() {
   const sheet = game.character;
   const transcript = game.transcript || [];
   const skills = Object.entries(sheet.skills).filter(([, value]) => value >= 40).sort((a,b) => b[1]-a[1]).slice(0, 12);
-  const progress = game.module?.progress || "1/1";
-  const [current, total] = progress.split("/").map(Number);
-  content.innerHTML = `<div class="game-layout">
-    <aside class="game-panel game-aside"><h2>${esc(sheet.name)}</h2><div class="row-meta">${esc(sheet.age)} 岁</div><div class="vitals"><div class="vital"><span>HP</span><strong>${esc(derivedValue(sheet,"HP"))}</strong></div><div class="vital"><span>SAN</span><strong>${esc(derivedValue(sheet,"SAN"))}</strong></div><div class="vital"><span>MP</span><strong>${esc(derivedValue(sheet,"MP"))}</strong></div><div class="vital"><span>LUCK</span><strong>${esc(sheet.current?.luck ?? sheet.attributes.LUCK)}</strong></div></div><h3>主要技能</h3><div class="skill-list">${skills.map(([name,value]) => `<div><span>${esc(name)}</span><strong>${value}</strong></div>`).join("")}</div></aside>
-    <section class="game-panel chat"><header class="chat-header"><button class="icon-button" id="back-games" type="button" aria-label="返回战役列表" title="返回">${icon("arrow-left")}</button><h1>${esc(game.title)}</h1><span class="row-meta">${esc(game.module?.scene || "")}</span></header>
+  content.innerHTML = `<div class="game-layout${state.investigatorCollapsed ? " investigator-collapsed" : ""}">
+    <aside class="game-panel game-aside investigator-panel"><div class="aside-toolbar"><button class="icon-button investigator-toggle" id="investigator-toggle" type="button" aria-label="${state.investigatorCollapsed ? "展开调查员详情" : "收起调查员详情"}" title="${state.investigatorCollapsed ? "展开调查员详情" : "收起调查员详情"}" aria-expanded="${!state.investigatorCollapsed}">${icon(state.investigatorCollapsed ? "panel-left-open" : "panel-left-close")}</button></div><div class="investigator-details"><h2>${esc(sheet.name)}</h2><div class="row-meta">${esc(sheet.age)} 岁</div><div class="vitals"><div class="vital"><span>HP</span><strong>${esc(derivedValue(sheet,"HP"))}</strong></div><div class="vital"><span>SAN</span><strong>${esc(derivedValue(sheet,"SAN"))}</strong></div><div class="vital"><span>MP</span><strong>${esc(derivedValue(sheet,"MP"))}</strong></div><div class="vital"><span>幸运 | LUCK</span><strong>${esc(sheet.current?.luck ?? sheet.attributes.LUCK)}</strong></div></div><h3>主要技能</h3><div class="skill-list">${skills.map(([name,value]) => `<div><span>${esc(name)}</span><strong>${value}</strong></div>`).join("")}</div></div></aside>
+    <section class="game-panel chat"><header class="chat-header"><button class="icon-button" id="back-games" type="button" aria-label="返回战役列表" title="返回">${icon("arrow-left")}</button><h1>${esc(game.title)}</h1></header>
       <div class="chat-log" id="chat-log">${transcript.length ? transcript.map((message) => `<article class="message ${message.role}"><div class="message-role">${message.role === "user" ? "调查员" : "Keeper"}</div><div class="message-content">${esc(message.content)}</div></article>`).join("") : `<div class="chat-empty"><div>${icon("lamp-desk")}<div>等待开场</div></div></div>`}</div>
       <form class="composer" id="composer"><textarea name="content" aria-label="调查员行动" placeholder="描述调查员的行动…" required></textarea><button class="icon-button" type="submit" aria-label="发送" title="发送">${icon("send")}</button></form>
     </section>
-    <aside class="game-panel game-aside"><h2>${esc(game.module?.module || "模组")}</h2><div class="module-progress"><div class="progress-label"><span>${esc(game.module?.scene || "当前场景")}</span><span>${esc(progress)}</span></div><div class="progress-track"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, current / total * 100))}%"></div></div></div><span class="context-badge">当前场景上下文</span><h3>模型</h3><div class="row-meta">${esc(state.status?.model || "-")}<br>${state.status?.context_window ? `${Number(state.status.context_window).toLocaleString()} context` : ""}</div></aside>
+    <aside class="game-panel game-aside"><h2>${esc(game.module?.module || "模组")}</h2><span class="context-badge">模组已载入</span><h3>模型</h3><div class="row-meta">${esc(state.status?.model || "-")}<br>${state.status?.context_window ? `${Number(state.status.context_window).toLocaleString()} context` : ""}</div></aside>
   </div>`;
   document.querySelector("#back-games").addEventListener("click", () => { state.activeGame = null; renderGames(); refreshIcons(); });
+  document.querySelector("#investigator-toggle").addEventListener("click", () => {
+    state.investigatorCollapsed = !state.investigatorCollapsed;
+    storeFlag("keeper-investigator-collapsed", state.investigatorCollapsed);
+    renderGame();
+    refreshIcons();
+  });
   document.querySelector("#composer").addEventListener("submit", sendMessage);
   const log = document.querySelector("#chat-log");
   log.scrollTop = log.scrollHeight;
@@ -398,6 +425,12 @@ document.addEventListener("click", (event) => {
   const viewTarget = event.target.closest("[data-view]");
   if (viewTarget) setView(viewTarget.dataset.view);
 });
+document.querySelector("#sidebar-toggle").addEventListener("click", () => {
+  state.navigationCollapsed = !state.navigationCollapsed;
+  storeFlag("keeper-navigation-collapsed", state.navigationCollapsed);
+  renderNavigationState();
+});
 document.querySelector(".modal-close").addEventListener("click", () => modal.close());
 modal.addEventListener("click", (event) => { if (event.target === modal) modal.close(); });
+renderNavigationState();
 bootstrap();
