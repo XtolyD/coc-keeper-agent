@@ -330,7 +330,7 @@ function openSkillEditor(id) {
 function renderModules() {
   const rows = state.modules.map((item) => `<div class="collection-row module-row"><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.source_name)} · ${item.pages} 页</div></div><span class="context-badge">Keeper 私密</span><div class="row-actions"><button class="button edit-module" data-id="${item.id}" type="button">${icon("file-pen-line")}检查 / 编辑</button><button class="icon-button danger delete-module" data-id="${item.id}" data-title="${esc(item.title)}" type="button" aria-label="删除模组 ${esc(item.title)}" title="删除模组">${icon("trash-2")}</button></div></div>`).join("");
   content.innerHTML = `<section class="page"><header class="page-header"><h1>模组库</h1></header>
-    <form class="upload-band" id="module-upload"><div class="field"><label for="module-title">模组名称</label><input id="module-title" name="title" placeholder="默认使用文件名"></div><div class="field"><label for="module-file">PDF 文件</label><input class="file-field" id="module-file" name="file" type="file" accept="application/pdf" required></div><button class="button primary" type="submit">${icon("upload")}导入模组</button></form>
+    <form class="upload-band" id="module-upload"><div class="field"><label for="module-title">模组名称</label><input id="module-title" name="title" placeholder="默认使用文件名"></div><div class="field"><label for="module-file">PDF 文件</label><input class="file-field" id="module-file" name="file" type="file" accept="application/pdf" required></div><label class="toggle-field" for="module-deep-analysis"><input id="module-deep-analysis" type="checkbox"><span>DeepSeek 深度分析</span></label><button class="button primary" type="submit">${icon("upload")}导入模组</button></form>
     ${rows ? `<div class="collection">${rows}</div>` : `<div class="empty-state"><div>${icon("book-open-text")}<h2>模组库为空</h2></div></div>`}
   </section>`;
   document.querySelector("#module-upload").addEventListener("submit", uploadModule);
@@ -341,68 +341,175 @@ function renderModules() {
 async function uploadModule(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const deepAnalysis = form.querySelector("#module-deep-analysis").checked;
   const data = new FormData(form);
   form.classList.add("loading");
   try {
-    await api("/api/modules/upload", {method: "POST", body: data});
+    const imported = await api("/api/modules/upload", {method: "POST", body: data});
+    if (deepAnalysis) {
+      await api(`/api/modules/${imported.id}/analyze`, {method: "POST"});
+      await waitForModuleAnalysis(imported.id);
+    }
     form.reset();
     await loadModules();
-    notify("模组已导入");
+    notify(deepAnalysis ? "模组已导入并完成深度分析" : "模组已导入，等待人工校对");
   } catch (error) { notify(error.message, true); }
   finally { form.classList.remove("loading"); }
 }
 
-function moduleSectionEditorHTML(section, index) {
-  return `<details class="module-editor-section" data-index="${index}" ${index === 0 ? "open" : ""}><summary><span>${esc(section.keeper_title || section.id)}</span><span class="row-meta">第 ${esc(section.page_start)}-${esc(section.page_end)} 页</span></summary><div class="module-section-fields">
-    <div class="form-grid module-meta-grid"><div class="field"><label>场景 ID</label><input data-field="id" value="${esc(section.id)}" maxlength="100" required></div><div class="field"><label>Keeper 标题</label><input data-field="keeper_title" value="${esc(section.keeper_title)}" maxlength="200" required></div><div class="field"><label>玩家可见标题</label><input data-field="public_title" value="${esc(section.public_title)}" maxlength="200" required></div><div class="field"><label>起始页</label><input data-field="page_start" type="number" min="0" value="${esc(section.page_start)}" required></div><div class="field"><label>结束页</label><input data-field="page_end" type="number" min="0" value="${esc(section.page_end)}" required></div></div>
-    <div class="field"><label>Keeper 原文</label><textarea data-field="text" rows="10" required>${esc(section.text)}</textarea></div>
-    <div class="module-list-grid"><div class="field"><label>推进目标（每行一项）</label><textarea data-field="objectives" rows="4">${esc((section.objectives || []).join("\n"))}</textarea></div><div class="field"><label>显式秘密（每行一项）</label><textarea data-field="secrets" rows="4">${esc((section.secrets || []).join("\n"))}</textarea></div></div>
-    <div class="module-section-actions"><button class="button remove-module-section" data-index="${index}" type="button">${icon("trash-2")}删除场景</button></div>
-  </div></details>`;
+async function waitForModuleAnalysis(id) {
+  let lastStage = "";
+  for (;;) {
+    const job = await api(`/api/modules/${id}/analysis`);
+    if (job.stage && job.stage !== lastStage) { lastStage = job.stage; notify(job.stage); }
+    if (job.status === "completed") return api(`/api/modules/${id}`);
+    if (job.status === "failed") throw new Error(`模组深度分析失败：${job.error || "未知错误"}`);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
 }
 
 function splitModuleLines(value) {
   return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
 
+function splitModuleIds(value) {
+  return value.split(/[,，\r\n]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function moduleJSON(value) {
+  return esc(JSON.stringify(value ?? {}, null, 2));
+}
+
+function parseModuleJSON(element, fallback, label) {
+  const value = element.value.trim();
+  if (!value) return fallback;
+  try { return JSON.parse(value); }
+  catch (_) { throw new Error(`${label}不是有效的 JSON`); }
+}
+
+function moduleActorHTML(actor, index) {
+  return `<details class="module-record module-actor" data-index="${index}" ${index === 0 ? "open" : ""}><summary><span>${esc(actor.name || actor.id)}</span><span class="row-meta">${actor.kind === "monster" ? "怪物" : "NPC"}</span></summary><div class="module-section-fields">
+    <div class="form-grid module-entity-grid"><div class="field"><label>实体 ID</label><input data-field="id" value="${esc(actor.id)}" required></div><div class="field"><label>名称</label><input data-field="name" value="${esc(actor.name)}" required></div><div class="field"><label>类型</label><select data-field="kind"><option value="npc" ${actor.kind !== "monster" ? "selected" : ""}>NPC</option><option value="monster" ${actor.kind === "monster" ? "selected" : ""}>怪物</option></select></div><div class="field"><label>剧情职责</label><input data-field="role" value="${esc(actor.role)}"></div></div>
+    <div class="module-list-grid"><div class="field"><label>外貌与背景</label><textarea data-field="description" rows="4">${esc(actor.description)}</textarea></div><div class="field"><label>动机</label><textarea data-field="motivation" rows="4">${esc(actor.motivation)}</textarea></div></div>
+    <div class="module-list-grid"><div class="field"><label>属性 JSON</label><textarea class="mono-input" data-field="attributes" rows="8">${moduleJSON(actor.attributes)}</textarea></div><div class="field"><label>技能 JSON</label><textarea class="mono-input" data-field="skills" rows="8">${moduleJSON(actor.skills)}</textarea></div></div>
+    <div class="field"><label>攻击 JSON 数组</label><textarea class="mono-input" data-field="attacks" rows="5">${moduleJSON(actor.attacks || [])}</textarea></div>
+    <div class="form-grid module-entity-grid"><div class="field"><label>护甲</label><input data-field="armor" value="${esc(actor.armor)}"></div><div class="field"><label>理智损失</label><input data-field="sanity_loss" value="${esc(actor.sanity_loss)}"></div><div class="field"><label>别名</label><input data-field="aliases" value="${esc((actor.aliases || []).join("，"))}"></div><div class="field"><label>来源页</label><input data-field="source_pages" value="${esc((actor.source_pages || []).join(", "))}"></div></div>
+    <div class="field"><label>Keeper 备注（每行一项）</label><textarea data-field="notes" rows="3">${esc((actor.notes || []).join("\n"))}</textarea></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="actors" data-index="${index}" type="button">${icon("trash-2")}删除实体</button></div>
+  </div></details>`;
+}
+
+function moduleLocationHTML(location, index) {
+  return `<details class="module-record module-location" data-index="${index}"><summary><span>${esc(location.name || location.id)}</span><span class="row-meta">地点</span></summary><div class="module-section-fields"><div class="form-grid module-entity-grid"><div class="field"><label>地点 ID</label><input data-field="id" value="${esc(location.id)}" required></div><div class="field"><label>名称</label><input data-field="name" value="${esc(location.name)}" required></div><div class="field"><label>来源页</label><input data-field="source_pages" value="${esc((location.source_pages || []).join(", "))}"></div></div><div class="module-list-grid"><div class="field"><label>稳定地点信息</label><textarea data-field="description" rows="4">${esc(location.description)}</textarea></div><div class="field"><label>感官氛围</label><textarea data-field="atmosphere" rows="4">${esc(location.atmosphere)}</textarea></div></div><div class="module-list-grid"><div class="field"><label>可交互特征（每行一项）</label><textarea data-field="features" rows="3">${esc((location.features || []).join("\n"))}</textarea></div><div class="field"><label>连接地点 ID</label><textarea data-field="connections" rows="3">${esc((location.connections || []).join("\n"))}</textarea></div></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="locations" data-index="${index}" type="button">${icon("trash-2")}删除地点</button></div></div></details>`;
+}
+
+function moduleSceneHTML(scene, index) {
+  return `<details class="module-record module-scene" data-index="${index}" ${index === 0 ? "open" : ""}><summary><span>${esc(scene.keeper_title || scene.id)}</span><span class="row-meta">第 ${esc(scene.page_start)}-${esc(scene.page_end)} 页</span></summary><div class="module-section-fields">
+    <div class="form-grid module-meta-grid"><div class="field"><label>场景 ID</label><input data-field="id" value="${esc(scene.id)}" required></div><div class="field"><label>Keeper 标题</label><input data-field="keeper_title" value="${esc(scene.keeper_title)}" required></div><div class="field"><label>玩家可见标题</label><input data-field="public_title" value="${esc(scene.public_title)}" required></div><div class="field"><label>起始页</label><input data-field="page_start" type="number" min="0" value="${esc(scene.page_start)}" required></div><div class="field"><label>结束页</label><input data-field="page_end" type="number" min="0" value="${esc(scene.page_end)}" required></div></div>
+    <div class="form-grid module-header-grid"><div class="field"><label>地点 ID</label><input data-field="location_id" value="${esc(scene.location_id)}"></div><div class="field"><label>出场角色/怪物 ID</label><input data-field="actor_ids" value="${esc((scene.actor_ids || []).join(", "))}"></div></div>
+    <div class="module-list-grid"><div class="field"><label>当前局面摘要</label><textarea data-field="summary" rows="4">${esc(scene.summary)}</textarea></div><div class="field"><label>场景氛围</label><textarea data-field="atmosphere" rows="4">${esc(scene.atmosphere)}</textarea></div></div>
+    <div class="module-list-grid"><div class="field"><label>进入条件（每行一项）</label><textarea data-field="entry_conditions" rows="3">${esc((scene.entry_conditions || []).join("\n"))}</textarea></div><div class="field"><label>可用出口（每行一项）</label><textarea data-field="exits" rows="3">${esc((scene.exits || []).join("\n"))}</textarea></div></div>
+    <div class="module-list-grid"><div class="field"><label>线索 JSON 数组</label><textarea class="mono-input" data-field="clues" rows="8">${moduleJSON(scene.clues || [])}</textarea></div><div class="field"><label>事件 JSON 数组</label><textarea class="mono-input" data-field="events" rows="8">${moduleJSON(scene.events || [])}</textarea></div></div>
+    <div class="module-list-grid"><div class="field"><label>推进目标（每行一项）</label><textarea data-field="objectives" rows="4">${esc((scene.objectives || []).join("\n"))}</textarea></div><div class="field"><label>显式秘密（每行一项）</label><textarea data-field="secrets" rows="4">${esc((scene.secrets || []).join("\n"))}</textarea></div></div>
+    <div class="field"><label>关联原文片段 ID</label><input data-field="source_chunk_ids" value="${esc((scene.source_chunk_ids || []).join(", "))}"></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="scenes" data-index="${index}" type="button">${icon("trash-2")}删除场景</button></div>
+  </div></details>`;
+}
+
+function moduleNodeHTML(node, index, scenes) {
+  return `<details class="module-record module-node" data-index="${index}"><summary><span>${esc(node.title || node.id)}</span><span class="row-meta">${esc(node.kind || "scene")}</span></summary><div class="module-section-fields"><div class="form-grid module-entity-grid"><div class="field"><label>节点 ID</label><input data-field="id" value="${esc(node.id)}" required></div><div class="field"><label>标题</label><input data-field="title" value="${esc(node.title)}" required></div><div class="field"><label>关联场景</label><select data-field="scene_id">${scenes.map((scene) => `<option value="${esc(scene.id)}" ${scene.id === node.scene_id ? "selected" : ""}>${esc(scene.keeper_title)}</option>`).join("")}</select></div><div class="field"><label>节点类型</label><select data-field="kind">${["entry","scene","choice","ending"].map((kind) => `<option value="${kind}" ${kind === node.kind ? "selected" : ""}>${kind}</option>`).join("")}</select></div></div><div class="field"><label>剧情节点摘要</label><textarea data-field="summary" rows="4">${esc(node.summary)}</textarea></div><div class="module-list-grid"><div class="field"><label>前置条件（每行一项）</label><textarea data-field="prerequisites" rows="3">${esc((node.prerequisites || []).join("\n"))}</textarea></div><div class="field"><label>节点效果（每行一项）</label><textarea data-field="effects" rows="3">${esc((node.effects || []).join("\n"))}</textarea></div></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="nodes" data-index="${index}" type="button">${icon("trash-2")}删除节点</button></div></div></details>`;
+}
+
+function moduleEdgeHTML(edge, index, nodes) {
+  return `<details class="module-record module-edge" data-index="${index}"><summary><span>${esc(edge.choice_label || edge.id)}</span><span class="row-meta">${esc(edge.source)} → ${esc(edge.target)}</span></summary><div class="module-section-fields"><div class="form-grid module-entity-grid"><div class="field"><label>分支 ID</label><input data-field="id" value="${esc(edge.id)}" required></div><div class="field"><label>来源节点</label><select data-field="source">${nodes.map((node) => `<option value="${esc(node.id)}" ${node.id === edge.source ? "selected" : ""}>${esc(node.title)}</option>`).join("")}</select></div><div class="field"><label>目标节点</label><select data-field="target">${nodes.map((node) => `<option value="${esc(node.id)}" ${node.id === edge.target ? "selected" : ""}>${esc(node.title)}</option>`).join("")}</select></div><div class="field"><label>玩家选择 / 事件结果</label><input data-field="choice_label" value="${esc(edge.choice_label)}"></div></div><div class="field"><label>进入条件</label><textarea data-field="condition" rows="3">${esc(edge.condition)}</textarea></div><div class="binary-row"><label><input data-field="is_default" type="checkbox" ${edge.is_default ? "checked" : ""}> 默认分支</label><label><input data-field="secret" type="checkbox" ${edge.secret ? "checked" : ""}> Keeper 秘密分支</label></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="edges" data-index="${index}" type="button">${icon("trash-2")}删除分支</button></div></div></details>`;
+}
+
+function moduleSourceHTML(chunk, index) {
+  return `<details class="module-record module-source" data-index="${index}"><summary><span>${esc(chunk.heading || chunk.id)}</span><span class="row-meta">第 ${esc(chunk.page_start)}-${esc(chunk.page_end)} 页</span></summary><div class="module-section-fields"><div class="form-grid module-meta-grid"><div class="field"><label>片段 ID</label><input data-field="id" value="${esc(chunk.id)}" required></div><div class="field"><label>标题</label><input data-field="heading" value="${esc(chunk.heading)}"></div><div class="field"><label>起始页</label><input data-field="page_start" type="number" min="0" value="${esc(chunk.page_start)}"></div><div class="field"><label>结束页</label><input data-field="page_end" type="number" min="0" value="${esc(chunk.page_end)}"></div></div><div class="field"><label>PDF 提取原文</label><textarea data-field="text" rows="16">${esc(chunk.text)}</textarea></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="source_chunks" data-index="${index}" type="button">${icon("trash-2")}删除原文片段</button></div></div></details>`;
+}
+
 function collectModuleEditor() {
+  const actors = [...document.querySelectorAll(".module-actor")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), name: element.querySelector('[data-field="name"]').value.trim(), kind: element.querySelector('[data-field="kind"]').value, aliases: splitModuleIds(element.querySelector('[data-field="aliases"]').value), role: element.querySelector('[data-field="role"]').value.trim(), description: element.querySelector('[data-field="description"]').value.trim(), motivation: element.querySelector('[data-field="motivation"]').value.trim(), attributes: parseModuleJSON(element.querySelector('[data-field="attributes"]'), {}, "角色属性"), skills: parseModuleJSON(element.querySelector('[data-field="skills"]'), {}, "角色技能"), attacks: parseModuleJSON(element.querySelector('[data-field="attacks"]'), [], "角色攻击"), armor: element.querySelector('[data-field="armor"]').value.trim(), sanity_loss: element.querySelector('[data-field="sanity_loss"]').value.trim(), notes: splitModuleLines(element.querySelector('[data-field="notes"]').value), source_pages: splitModuleIds(element.querySelector('[data-field="source_pages"]').value).map(Number)}));
+  const locations = [...document.querySelectorAll(".module-location")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), name: element.querySelector('[data-field="name"]').value.trim(), description: element.querySelector('[data-field="description"]').value.trim(), atmosphere: element.querySelector('[data-field="atmosphere"]').value.trim(), features: splitModuleLines(element.querySelector('[data-field="features"]').value), connections: splitModuleIds(element.querySelector('[data-field="connections"]').value), source_pages: splitModuleIds(element.querySelector('[data-field="source_pages"]').value).map(Number)}));
+  const scenes = [...document.querySelectorAll(".module-scene")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), keeper_title: element.querySelector('[data-field="keeper_title"]').value.trim(), public_title: element.querySelector('[data-field="public_title"]').value.trim(), location_id: element.querySelector('[data-field="location_id"]').value.trim(), summary: element.querySelector('[data-field="summary"]').value.trim(), atmosphere: element.querySelector('[data-field="atmosphere"]').value.trim(), entry_conditions: splitModuleLines(element.querySelector('[data-field="entry_conditions"]').value), exits: splitModuleLines(element.querySelector('[data-field="exits"]').value), actor_ids: splitModuleIds(element.querySelector('[data-field="actor_ids"]').value), clues: parseModuleJSON(element.querySelector('[data-field="clues"]'), [], "场景线索"), events: parseModuleJSON(element.querySelector('[data-field="events"]'), [], "场景事件"), objectives: splitModuleLines(element.querySelector('[data-field="objectives"]').value), secrets: splitModuleLines(element.querySelector('[data-field="secrets"]').value), source_chunk_ids: splitModuleIds(element.querySelector('[data-field="source_chunk_ids"]').value), page_start: Number(element.querySelector('[data-field="page_start"]').value), page_end: Number(element.querySelector('[data-field="page_end"]').value)}));
+  const nodes = [...document.querySelectorAll(".module-node")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), title: element.querySelector('[data-field="title"]').value.trim(), scene_id: element.querySelector('[data-field="scene_id"]').value, kind: element.querySelector('[data-field="kind"]').value, summary: element.querySelector('[data-field="summary"]').value.trim(), prerequisites: splitModuleLines(element.querySelector('[data-field="prerequisites"]').value), effects: splitModuleLines(element.querySelector('[data-field="effects"]').value)}));
+  const edges = [...document.querySelectorAll(".module-edge")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), source: element.querySelector('[data-field="source"]').value, target: element.querySelector('[data-field="target"]').value, condition: element.querySelector('[data-field="condition"]').value.trim(), choice_label: element.querySelector('[data-field="choice_label"]').value.trim(), is_default: element.querySelector('[data-field="is_default"]').checked, secret: element.querySelector('[data-field="secret"]').checked}));
+  const sourceChunks = [...document.querySelectorAll(".module-source")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), heading: element.querySelector('[data-field="heading"]').value.trim(), page_start: Number(element.querySelector('[data-field="page_start"]').value), page_end: Number(element.querySelector('[data-field="page_end"]').value), text: element.querySelector('[data-field="text"]').value}));
   return {
     title: document.querySelector("#edit-module-title").value.trim(),
     source_name: document.querySelector("#edit-module-source").value.trim(),
-    sections: [...document.querySelectorAll(".module-editor-section")].map((element) => ({
-      id: element.querySelector('[data-field="id"]').value.trim(),
-      keeper_title: element.querySelector('[data-field="keeper_title"]').value.trim(),
-      public_title: element.querySelector('[data-field="public_title"]').value.trim(),
-      page_start: Number(element.querySelector('[data-field="page_start"]').value),
-      page_end: Number(element.querySelector('[data-field="page_end"]').value),
-      text: element.querySelector('[data-field="text"]').value.trim(),
-      objectives: splitModuleLines(element.querySelector('[data-field="objectives"]').value),
-      secrets: splitModuleLines(element.querySelector('[data-field="secrets"]').value),
-    })),
+    actors, locations, scenes, source_chunks: sourceChunks,
+    story: {outline: splitModuleLines(document.querySelector("#story-outline").value), entry_node_id: document.querySelector("#story-entry").value, nodes, edges},
+    analysis: state.editingModule.module.analysis || {},
   };
+}
+
+function activateModuleTab(name) {
+  document.querySelectorAll(".module-editor-tab").forEach((button) => { const active = button.dataset.tab === name; button.classList.toggle("active", active); button.setAttribute("aria-selected", String(active)); });
+  document.querySelectorAll(".module-editor-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== name; });
 }
 
 function renderModuleEditor() {
   const module = state.editingModule.module;
-  modalContent.innerHTML = `<form class="modal-body" id="module-editor"><h2 class="modal-title">检查与编辑模组</h2><div class="module-editor-notice">Keeper 私密内容 · 修改仅影响之后创建的战役</div><div class="form-grid module-header-grid"><div class="field"><label for="edit-module-title">模组名称</label><input id="edit-module-title" value="${esc(module.title)}" maxlength="200" required></div><div class="field"><label for="edit-module-source">来源文件</label><input id="edit-module-source" value="${esc(module.source_name)}" maxlength="260"></div></div><div class="module-editor-toolbar"><strong>场景内容</strong><button class="button" id="add-module-section" type="button">${icon("plus")}添加场景</button></div><div class="module-sections">${module.sections.map(moduleSectionEditorHTML).join("")}</div><div class="form-footer"><button class="button primary" type="submit">${icon("save")}保存模组</button></div></form>`;
+  const story = module.story || {outline: [], entry_node_id: "", nodes: [], edges: []};
+  const status = module.analysis?.status === "complete" ? "深度分析完成" : module.analysis?.status === "partial" ? `部分分析完成 · ${module.analysis?.warnings?.length || 0} 项回退待校对` : "等待深度分析 / 人工校对";
+  modalContent.innerHTML = `<form class="modal-body" id="module-editor"><h2 class="modal-title">结构化模组编辑器</h2><div class="module-editor-notice">Keeper 私密内容 · ${esc(status)} · 修改仅影响之后创建的战役</div><div class="form-grid module-header-grid"><div class="field"><label for="edit-module-title">模组名称</label><input id="edit-module-title" value="${esc(module.title)}" maxlength="200" required></div><div class="field"><label for="edit-module-source">来源文件</label><input id="edit-module-source" value="${esc(module.source_name)}" maxlength="260"></div></div>
+    <div class="module-editor-actions"><button class="button" id="reanalyze-module" type="button">${icon("sparkles")}DeepSeek 重新分析</button><button class="button primary" type="submit">${icon("save")}保存模组</button></div>
+    <div class="module-editor-tabs" role="tablist"><button class="module-editor-tab active" data-tab="actors" role="tab" aria-selected="true" type="button">角色与怪物</button><button class="module-editor-tab" data-tab="scenes" role="tab" aria-selected="false" type="button">地点与场景</button><button class="module-editor-tab" data-tab="story" role="tab" aria-selected="false" type="button">故事线</button><button class="module-editor-tab" data-tab="source" role="tab" aria-selected="false" type="button">PDF 原文</button></div>
+    <section class="module-editor-panel" data-panel="actors"><div class="module-editor-toolbar"><strong>角色与怪物</strong><button class="button add-module-item" data-kind="actors" type="button">${icon("plus")}添加实体</button></div><div class="module-sections">${(module.actors || []).map(moduleActorHTML).join("") || '<div class="editor-empty">暂无已提取实体</div>'}</div></section>
+    <section class="module-editor-panel" data-panel="scenes" hidden><div class="module-editor-toolbar"><strong>地点</strong><button class="button add-module-item" data-kind="locations" type="button">${icon("plus")}添加地点</button></div><div class="module-sections">${(module.locations || []).map(moduleLocationHTML).join("")}</div><div class="module-editor-toolbar"><strong>可玩场景</strong><button class="button add-module-item" data-kind="scenes" type="button">${icon("plus")}添加场景</button></div><div class="module-sections">${(module.scenes || []).map(moduleSceneHTML).join("")}</div></section>
+    <section class="module-editor-panel" data-panel="story" hidden><div class="field"><label for="story-outline">剧情大纲（每行一个阶段或结局）</label><textarea id="story-outline" rows="7">${esc((story.outline || []).join("\n"))}</textarea></div><div class="field story-entry-field"><label for="story-entry">入口节点</label><select id="story-entry">${(story.nodes || []).map((node) => `<option value="${esc(node.id)}" ${node.id === story.entry_node_id ? "selected" : ""}>${esc(node.title)}</option>`).join("")}</select></div><div class="module-editor-toolbar"><strong>剧情节点</strong><button class="button add-module-item" data-kind="nodes" type="button">${icon("plus")}添加节点</button></div><div class="module-sections">${(story.nodes || []).map((node, index) => moduleNodeHTML(node, index, module.scenes || [])).join("")}</div><div class="module-editor-toolbar"><strong>分支连线</strong><button class="button add-module-item" data-kind="edges" type="button">${icon("plus")}添加分支</button></div><div class="module-sections">${(story.edges || []).map((edge, index) => moduleEdgeHTML(edge, index, story.nodes || [])).join("")}</div></section>
+    <section class="module-editor-panel" data-panel="source" hidden><div class="module-editor-toolbar"><strong>可追溯 PDF 原文</strong><button class="button add-module-item" data-kind="source_chunks" type="button">${icon("plus")}添加片段</button></div><div class="module-sections">${(module.source_chunks || []).map(moduleSourceHTML).join("")}</div></section>
+  </form>`;
   refreshIcons();
   document.querySelector("#module-editor").addEventListener("submit", saveModuleEditor);
-  document.querySelector("#add-module-section").addEventListener("click", () => {
+  document.querySelectorAll(".module-editor-tab").forEach((button) => button.addEventListener("click", () => activateModuleTab(button.dataset.tab)));
+  document.querySelectorAll(".add-module-item").forEach((button) => button.addEventListener("click", () => addModuleItem(button.dataset.kind)));
+  document.querySelectorAll(".remove-module-item").forEach((button) => button.addEventListener("click", () => removeModuleItem(button.dataset.kind, Number(button.dataset.index))));
+  document.querySelector("#reanalyze-module").addEventListener("click", reanalyzeModule);
+}
+
+function addModuleItem(kind) {
+  try {
     const current = collectModuleEditor();
-    const used = new Set(current.sections.map((section) => section.id));
-    let number = current.sections.length + 1;
-    while (used.has(`scene-${String(number).padStart(3, "0")}`)) number += 1;
-    current.sections.push({id: `scene-${String(number).padStart(3, "0")}`, keeper_title: "新场景", public_title: "当前场景", page_start: 0, page_end: 0, text: "待补充", objectives: [], secrets: []});
+    const number = ((kind === "nodes" || kind === "edges") ? current.story[kind].length : current[kind].length) + 1;
+    const padded = String(number).padStart(3, "0");
+    const defaults = {
+      actors: {id:`actor-${padded}`,name:"新实体",kind:"npc",aliases:[],role:"",description:"",motivation:"",attributes:{},skills:{},attacks:[],armor:"",sanity_loss:"",notes:[],source_pages:[]},
+      locations: {id:`location-${padded}`,name:"新地点",description:"",atmosphere:"",features:[],connections:[],source_pages:[]},
+      scenes: {id:`scene-${padded}`,keeper_title:"新场景",public_title:"当前场景",location_id:"",summary:"",atmosphere:"",entry_conditions:[],exits:[],actor_ids:[],clues:[],events:[],objectives:[],secrets:[],source_chunk_ids:[],page_start:0,page_end:0},
+      nodes: {id:`node-${padded}`,title:"新节点",scene_id:current.scenes[0]?.id || "",kind:"scene",summary:"",prerequisites:[],effects:[]},
+      edges: {id:`edge-${padded}`,source:current.story.nodes[0]?.id || "",target:current.story.nodes[0]?.id || "",condition:"",choice_label:"",is_default:false,secret:false},
+      source_chunks: {id:`source-${padded}`,heading:"新原文片段",page_start:0,page_end:0,text:""},
+    };
+    if (kind === "nodes" || kind === "edges") current.story[kind].push(defaults[kind]); else current[kind].push(defaults[kind]);
     state.editingModule.module = {...state.editingModule.module, ...current};
     renderModuleEditor();
-  });
-  document.querySelectorAll(".remove-module-section").forEach((button) => button.addEventListener("click", () => {
+    activateModuleTab(kind === "actors" ? "actors" : kind === "source_chunks" ? "source" : (kind === "nodes" || kind === "edges") ? "story" : "scenes");
+  } catch (error) { notify(error.message, true); }
+}
+
+function removeModuleItem(kind, index) {
+  try {
     const current = collectModuleEditor();
-    if (current.sections.length === 1) { notify("模组至少需要一个场景", true); return; }
-    current.sections.splice(Number(button.dataset.index), 1);
+    const items = (kind === "nodes" || kind === "edges") ? current.story[kind] : current[kind];
+    if ((kind === "scenes" || kind === "nodes" || kind === "source_chunks") && items.length === 1) { notify("该结构至少需要保留一项", true); return; }
+    items.splice(index, 1);
     state.editingModule.module = {...state.editingModule.module, ...current};
     renderModuleEditor();
-  }));
+    activateModuleTab(kind === "actors" ? "actors" : kind === "source_chunks" ? "source" : (kind === "nodes" || kind === "edges") ? "story" : "scenes");
+  } catch (error) { notify(error.message, true); }
+}
+
+async function reanalyzeModule() {
+  if (!window.confirm("DeepSeek 将重新读取 Keeper 私密原文，并替换尚未保存的结构化编辑。继续吗？")) return;
+  const form = document.querySelector("#module-editor");
+  form.classList.add("loading");
+  try {
+    const moduleId = state.editingModule.id;
+    await api(`/api/modules/${moduleId}/analyze`, {method:"POST"});
+    state.editingModule = await waitForModuleAnalysis(moduleId);
+    renderModuleEditor();
+    notify("模组深度分析已完成");
+  } catch (error) { notify(error.message, true); form.classList.remove("loading"); }
 }
 
 async function openModuleEditor(id) {

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import pymupdf
+import time
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 import coc_keeper.web as web
 
@@ -56,9 +58,12 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     detail_response = client.get(f"/api/modules/{module['id']}")
     assert detail_response.status_code == 200
     detail = detail_response.json()
-    assert detail["module"]["sections"]
+    assert detail["module"]["version"] == 2
+    assert detail["module"]["source_chunks"]
+    assert detail["module"]["scenes"]
+    assert detail["module"]["story"]["nodes"]
     detail["module"]["title"] = "修订后的测试模组"
-    detail["module"]["sections"][0]["public_title"] = "旧宅门前"
+    detail["module"]["scenes"][0]["public_title"] = "旧宅门前"
     update_response = client.put(f"/api/modules/{module['id']}", json=detail["module"])
     assert update_response.status_code == 200
     assert update_response.json()["module"]["title"] == "修订后的测试模组"
@@ -95,11 +100,43 @@ def test_web_status_declares_context_window(tmp_path, monkeypatch):
     assert payload["context_window"] == 1_000_000
 
 
+def test_web_can_run_deep_module_analysis(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
+    client = TestClient(web.app)
+    module = client.post(
+        "/api/modules/upload",
+        files={"file": ("test.pdf", make_pdf(), "application/pdf")},
+        data={"title": "待分析模组"},
+    ).json()
+
+    class StubAnalyzer:
+        def __init__(self, _client, **_kwargs):
+            pass
+
+        def analyze(self, value):
+            value.analysis = {"mode": "llm", "status": "complete"}
+            return value
+
+    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(is_configured=True))
+    monkeypatch.setattr(web, "LLMClient", lambda _settings: object())
+    monkeypatch.setattr(web, "LLMModuleAnalyzer", StubAnalyzer)
+    response = client.post(f"/api/modules/{module['id']}/analyze")
+    assert response.status_code == 202
+    for _ in range(100):
+        status = client.get(f"/api/modules/{module['id']}/analysis").json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.01)
+    assert status["status"] == "completed"
+    detail = client.get(f"/api/modules/{module['id']}").json()
+    assert detail["module"]["analysis"]["status"] == "complete"
+
+
 def test_web_attribute_labels_are_bilingual():
     client = TestClient(web.app)
     page = client.get("/").text
-    assert "/assets/app.js?v=1.4.0" in page
-    assert "/assets/styles.css?v=1.4.0" in page
+    assert "/assets/app.js?v=2.0.0" in page
+    assert "/assets/styles.css?v=2.0.0" in page
     assert 'id="sidebar-toggle"' in page
     script = client.get("/assets/app.js")
     assert script.status_code == 200
@@ -114,4 +151,8 @@ def test_web_attribute_labels_are_bilingual():
     assert 'class="icon-button danger delete-character"' in script.text
     assert 'class="icon-button danger delete-module"' in script.text
     assert "检查 / 编辑" in script.text
+    assert "角色与怪物" in script.text
+    assert "地点与场景" in script.text
+    assert "故事线" in script.text
+    assert "DeepSeek 重新分析" in script.text
     assert 'method: "DELETE"' in script.text

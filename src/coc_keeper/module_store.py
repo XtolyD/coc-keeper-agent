@@ -33,7 +33,9 @@ class ModuleRecord:
     def summary(self) -> dict[str, Any]:
         return {
             "id": self.id, "title": self.module.title, "source_name": self.module.source_name,
-            "sections": len(self.module.sections), "pages": max(section.page_end for section in self.module.sections),
+            "scenes": len(self.module.scenes), "actors": len(self.module.actors),
+            "pages": max(scene.page_end for scene in self.module.scenes),
+            "analysis_status": self.module.analysis.get("status", "needs-review"),
             "created_at": self.created_at,
         }
 

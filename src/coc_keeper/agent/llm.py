@@ -44,6 +44,8 @@ class LLMClient:
         tool_choice: str = "auto",
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
+        response_format: Optional[dict[str, Any]] = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": self.settings.model,
@@ -54,6 +56,10 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        if response_format is not None:
+            kwargs["response_format"] = response_format
 
         started = perf_counter()
         resp = self.client.chat.completions.create(**kwargs)

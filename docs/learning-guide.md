@@ -41,11 +41,12 @@ python -c "from coc_keeper.rules.retrieval import load_default_index; print(load
 
 ## 第四阶段：理解 PDF 模组的信息边界
 
-先读 `modules.py`，再读 `tests/test_modules.py`。重点区分三种数据：完整 Keeper 模组、当前场景上下文、
-玩家安全状态。观察为什么 `keeper_context` 从不搜索未来场景，以及 `advance` 如何用目标清单约束顺序。
+先读 `modules.py`，再读 `tests/test_modules.py`。重点区分原文块、角色/怪物、地点、场景和剧情图五个边界。
+观察 `KeeperModule.from_dict` 如何迁移旧 `sections`，`keeper_context` 如何只展开当前节点引用，以及 `advance`
+如何在完成目标后限制到当前可用分支。随后阅读 `module_analysis.py` 的分阶段 JSON 提取、引用校验和局部回退。
 
-建议练习：导入一个两页 PDF，在第二场景的 `secrets` 中加入一个真相，验证第一场景既搜不到它，
-Agent 也不能把它直接发给玩家。随后修改 `objectives`，观察未完成目标时推进为何失败。
+建议练习：建立入口、调查和逃离三个节点，让入口同时连接后两个节点。先不传 `next_node_id` 验证运行时拒绝
+含糊推进，再选择其中一条边并保存/恢复；最后确认另一分支的秘密既无法检索，也无法被 Agent 直接复述。
 
 ## 第五阶段：理解工具调用协议
 

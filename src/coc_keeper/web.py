@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent.agent import KeeperAgent
+from .agent.llm import LLMClient
 from .agent.prompts import KP_SYSTEM_PROMPT
 from .agent.state import Session
 from .character import (
@@ -26,8 +27,9 @@ from .character import (
 from .character_store import CharacterStore
 from .config import PROJECT_ROOT, Settings
 from .game_store import GameRecord, GameStore, TranscriptEntry
+from .module_analysis import LLMModuleAnalyzer
 from .module_store import ModuleStore
-from .modules import KeeperModule, ModuleRuntime, ModuleSection
+from .modules import KeeperModule, ModuleRuntime
 from .occupations import (
     get_occupation, interest_point_budget, list_occupations,
 )
@@ -59,21 +61,15 @@ class ModulePathRequest(BaseModel):
     title: str | None = None
 
 
-class ModuleSectionUpdate(BaseModel):
-    id: str = Field(min_length=1, max_length=100)
-    keeper_title: str = Field(min_length=1, max_length=200)
-    public_title: str = Field(default="当前场景", min_length=1, max_length=200)
-    page_start: int = Field(default=0, ge=0)
-    page_end: int = Field(default=0, ge=0)
-    text: str = Field(min_length=1)
-    objectives: list[str] = Field(default_factory=list)
-    secrets: list[str] = Field(default_factory=list)
-
-
 class ModuleUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     source_name: str = Field(default="", max_length=260)
-    sections: list[ModuleSectionUpdate] = Field(min_length=1)
+    actors: list[dict[str, Any]] = Field(default_factory=list)
+    locations: list[dict[str, Any]] = Field(default_factory=list)
+    source_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    scenes: list[dict[str, Any]] = Field(min_length=1)
+    story: dict[str, Any] = Field(default_factory=dict)
+    analysis: dict[str, Any] = Field(default_factory=dict)
 
 
 class GameCreateRequest(BaseModel):
@@ -94,6 +90,7 @@ class WebService:
         self.games = GameStore(self.data_root / "campaigns")
         self.drafts: dict[str, list[CharacterSheet]] = {}
         self._locks: dict[str, threading.Lock] = {}
+        self.analysis_jobs: dict[str, dict[str, Any]] = {}
 
     def lock(self, game_id: str) -> threading.Lock:
         self._locks.setdefault(game_id, threading.Lock())
@@ -138,7 +135,7 @@ class WebService:
 
 
 service = WebService()
-app = FastAPI(title="CoC Keeper", version="1.4.0")
+app = FastAPI(title="CoC Keeper", version="2.0.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -271,28 +268,50 @@ def get_module(module_id: str):
 
 @app.put("/api/modules/{module_id}")
 def update_module(module_id: str, request: ModuleUpdateRequest):
-    section_ids = [section.id.strip() for section in request.sections]
     if not request.title.strip():
         raise HTTPException(status_code=400, detail="模组名称不能为空")
-    if any(not section_id for section_id in section_ids):
-        raise HTTPException(status_code=400, detail="场景 ID 不能为空")
-    if len(section_ids) != len(set(section_ids)):
-        raise HTTPException(status_code=400, detail="场景 ID 不能重复")
-    sections: list[ModuleSection] = []
-    for item in request.sections:
-        if not item.keeper_title.strip() or not item.public_title.strip() or not item.text.strip():
-            raise HTTPException(status_code=400, detail=f"场景 {item.id} 的标题和原文不能为空")
-        if item.page_end < item.page_start:
-            raise HTTPException(status_code=400, detail=f"场景 {item.id} 的结束页不能小于起始页")
-        sections.append(ModuleSection(
-            id=item.id.strip(), keeper_title=item.keeper_title.strip(),
-            public_title=item.public_title.strip(), page_start=item.page_start,
-            page_end=item.page_end, text=item.text.strip(),
-            objectives=[value.strip() for value in item.objectives if value.strip()],
-            secrets=[value.strip() for value in item.secrets if value.strip()],
-        ))
-    module = KeeperModule(request.title.strip(), request.source_name.strip(), sections)
+    module = KeeperModule.from_dict({
+        **request.model_dump(), "title": request.title.strip(),
+        "source_name": request.source_name.strip(), "version": 2,
+    })
     return service.module_detail_payload(service.modules.save(module_id, module))
+
+
+@app.post("/api/modules/{module_id}/analyze", status_code=202)
+def analyze_module(module_id: str):
+    settings = Settings()
+    if not settings.is_configured:
+        raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API，无法进行模组深度分析")
+    service.modules.get(module_id)
+    current = service.analysis_jobs.get(module_id)
+    if current and current.get("status") == "running":
+        return current
+    job = {"module_id": module_id, "status": "running", "stage": "准备分析", "error": None}
+    service.analysis_jobs[module_id] = job
+
+    def run_analysis() -> None:
+        try:
+            record = service.modules.get(module_id)
+            analyzer = LLMModuleAnalyzer(
+                LLMClient(settings), progress=lambda stage: job.update(stage=stage),
+            )
+            module = analyzer.analyze(record.module)
+            service.modules.save(module_id, module)
+            job.update(status="completed", stage="分析完成", analysis=module.analysis)
+        except Exception as exc:  # noqa: BLE001 - invalid analysis must not overwrite the stored module
+            job.update(status="failed", stage="分析失败", error=f"{type(exc).__name__}: {exc}")
+
+    threading.Thread(target=run_analysis, name=f"module-analysis-{module_id[:8]}", daemon=True).start()
+    return job
+
+
+@app.get("/api/modules/{module_id}/analysis")
+def module_analysis_status(module_id: str):
+    record = service.modules.get(module_id)
+    return service.analysis_jobs.get(module_id, {
+        "module_id": module_id, "status": "idle", "stage": "尚未启动",
+        "error": None, "analysis": record.module.analysis,
+    })
 
 
 @app.delete("/api/modules/{module_id}")

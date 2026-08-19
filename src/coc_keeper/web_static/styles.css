@@ -237,22 +237,36 @@ button { cursor: pointer; }
 .allocation-row input:disabled { background: #edf0ee; color: #8b938e; }
 .skill-total { text-align: center; font-size: 14px; }
 
-.upload-band, .new-game-band { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; padding: 16px 0 22px; border-top: 1px solid var(--line); }
+.upload-band { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 12px; align-items: end; padding: 16px 0 22px; border-top: 1px solid var(--line); }
+.new-game-band { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; padding: 16px 0 22px; border-top: 1px solid var(--line); }
 .file-field { min-height: 40px; padding: 7px; border: 1px dashed #9ba7a0; background: var(--surface); }
+.toggle-field { min-height: 40px; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 
 .module-editor-notice { color: var(--accent); font-size: 12px; font-weight: 700; margin: -12px 0 18px; }
 .module-header-grid { grid-template-columns: minmax(260px, 1fr) minmax(220px, 1fr); max-width: none; }
+.module-editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 16px 0; }
+.module-editor-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin: 4px 0 18px; }
+.module-editor-tab { min-height: 40px; padding: 0 16px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-weight: 700; }
+.module-editor-tab:hover { color: var(--ink); background: var(--surface-soft); }
+.module-editor-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.module-editor-panel[hidden] { display: none; }
 .module-editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 10px; }
 .module-sections { display: grid; gap: 10px; }
-.module-editor-section { border: 1px solid var(--line); background: #fff; }
-.module-editor-section > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 15px; cursor: pointer; font-weight: 700; }
-.module-editor-section[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.module-record { border: 1px solid var(--line); background: #fff; }
+.module-record > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 15px; cursor: pointer; font-weight: 700; }
+.module-record[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-soft); }
 .module-section-fields { display: grid; gap: 14px; padding: 16px; }
 .module-meta-grid { grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.4fr) minmax(180px, 1.4fr) 100px 100px; max-width: none; }
+.module-entity-grid { grid-template-columns: repeat(4, minmax(150px, 1fr)); max-width: none; }
 .module-list-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .module-section-fields textarea { resize: vertical; line-height: 1.55; }
 .module-section-actions { display: flex; justify-content: flex-end; }
-.remove-module-section { color: var(--danger); }
+.remove-module-item { color: var(--danger); }
+.mono-input { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.binary-row { display: flex; align-items: center; gap: 22px; color: var(--muted); font-size: 12px; }
+.binary-row label { display: inline-flex; align-items: center; gap: 7px; }
+.story-entry-field { max-width: 420px; margin-top: 14px; }
+.editor-empty { padding: 24px; border: 1px dashed var(--line); color: var(--muted); text-align: center; }
 
 .game-layout { height: calc(100vh - 58px); display: grid; grid-template-columns: 250px minmax(360px, 1fr) 230px; background: var(--surface); transition: grid-template-columns 160ms ease; }
 .game-layout.investigator-collapsed { grid-template-columns: 52px minmax(360px, 1fr) 230px; }
@@ -316,6 +330,7 @@ button { cursor: pointer; }
   .game-layout { grid-template-columns: 210px minmax(0, 1fr); }
   .game-layout > .game-panel:last-child { display: none; }
   .module-meta-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+  .module-entity-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
 }
 
 @media (max-width: 720px) {

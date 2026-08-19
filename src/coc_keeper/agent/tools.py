@@ -180,10 +180,14 @@ def make_dispatcher(
             raise ValueError("当前未加载模组")
         return session.module.keeper_context(query, limit=max(1, min(int(limit), 5)))
 
-    def _advance_module(reason: str, completed_objectives: list[str] | None = None) -> dict:
+    def _advance_module(
+        reason: str,
+        completed_objectives: list[str] | None = None,
+        next_node_id: str | None = None,
+    ) -> dict:
         if session.module is None:
             raise ValueError("当前未加载模组")
-        result = session.module.advance(reason, completed_objectives)
+        result = session.module.advance(reason, completed_objectives, next_node_id)
         session.log("推进模组场景", reason=reason, scene=result["scene"])
         return result
 
@@ -437,7 +441,7 @@ TOOLS_SCHEMA: list[dict] = [
         "type": "function",
         "function": {
             "name": "advance_module",
-            "description": "当前场景目标全部完成后，严格顺序推进到下一场景。不得跳过场景。",
+            "description": "当前场景目标完成后，依据玩家行动沿剧情图推进。不得选择当前不可用的分支。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -445,6 +449,10 @@ TOOLS_SCHEMA: list[dict] = [
                     "completed_objectives": {
                         "type": "array", "items": {"type": "string"},
                         "description": "已完成目标，必须与当前场景清单逐项一致",
+                    },
+                    "next_node_id": {
+                        "type": "string",
+                        "description": "存在多个剧情分支时，从 search_module 的 available_branches 选择目标节点 ID",
                     },
                 },
                 "required": ["reason"],
