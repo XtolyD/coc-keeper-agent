@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from openai import OpenAI
 
-from ..config import Settings
+from ..config import GrokVisionSettings, Settings
 
 
 @dataclass
@@ -24,11 +24,11 @@ class LLMResponse:
 class LLMClient:
     """基于 OpenAI SDK 的兼容客户端。换供应商只需改 .env。"""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings | GrokVisionSettings):
         self.settings = settings
         if not settings.is_configured:
             raise RuntimeError(
-                "LLM 未配置：请在 .env 中设置 DEEPSEEK_API_KEY（可选 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL）"
+                "LLM 未配置：请在 .env 中配置所选供应商的 API 地址、密钥和模型"
             )
         self.client = OpenAI(
             api_key=settings.api_key,
@@ -64,6 +64,8 @@ class LLMClient:
         started = perf_counter()
         resp = self.client.chat.completions.create(**kwargs)
         latency_ms = (perf_counter() - started) * 1000
+        if not hasattr(resp, "choices"):
+            raise RuntimeError("模型接口没有返回 OpenAI 兼容的 chat.completions JSON")
         msg = resp.choices[0].message
         usage = getattr(resp, "usage", None)
         reasoning_content = getattr(msg, "reasoning_content", None)

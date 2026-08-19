@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +51,10 @@ class ModuleStore:
             raise ValueError("模组 ID 必须是 32 位十六进制字符串")
         return self.root / f"{module_id}.json"
 
+    def _source_path(self, module_id: str) -> Path:
+        self._path(module_id)  # Validate the identifier through the shared guard.
+        return self.root / f"{module_id}.pdf"
+
     @staticmethod
     def _write(path: Path, payload: dict[str, Any]) -> None:
         temporary = path.with_suffix(".tmp")
@@ -62,7 +67,22 @@ class ModuleStore:
         return record
 
     def import_pdf(self, path: str | Path, *, title: str | None = None) -> ModuleRecord:
-        return self.add(PDFModuleImporter().import_pdf(path, title=title))
+        source = Path(path)
+        record = self.add(PDFModuleImporter().import_pdf(source, title=title))
+        destination = self._source_path(record.id)
+        temporary = destination.with_suffix(".pdf.tmp")
+        try:
+            shutil.copyfile(source, temporary)
+            temporary.replace(destination)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            self._path(record.id).unlink(missing_ok=True)
+            raise
+        return record
+
+    def source_pdf_path(self, module_id: str) -> Path | None:
+        path = self._source_path(module_id)
+        return path if path.exists() else None
 
     def get(self, module_id: str) -> ModuleRecord:
         path = self._path(module_id)
@@ -81,6 +101,7 @@ class ModuleStore:
         if not path.exists():
             raise FileNotFoundError(f"模组不存在: {module_id}")
         path.unlink()
+        self._source_path(module_id).unlink(missing_ok=True)
 
     def list(self) -> list[ModuleRecord]:
         records: list[ModuleRecord] = []

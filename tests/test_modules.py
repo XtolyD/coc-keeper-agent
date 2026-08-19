@@ -38,6 +38,23 @@ def test_pdf_toc_controls_sections(tmp_path):
     assert module.sections[0].page_end == 2
 
 
+def test_hybrid_pdf_import_preserves_raw_and_corrected_text(tmp_path):
+    path = tmp_path / "hybrid.pdf"
+    build_pdf(path, ["Raw column order text."])
+    module = PDFModuleImporter().import_pdf(
+        path,
+        page_text_override=["Correct visual reading order."],
+        extraction_metadata={"model": "grok-4.5", "status": "complete"},
+    )
+    chunk = module.source_chunks[0]
+    assert chunk.text.endswith("Correct visual reading order.")
+    assert chunk.raw_text.endswith("Raw column order text.")
+    assert chunk.extraction_method == "hybrid-vision"
+    assert "【视觉校正文】" in chunk.analysis_text()
+    assert "【PDF 文本层原文】" in chunk.analysis_text()
+    assert module.analysis["vision"]["model"] == "grok-4.5"
+
+
 def make_runtime():
     return ModuleRuntime(KeeperModule("测试模组", "test.pdf", [
         ModuleSection("scene-001", "门厅", "场景 1", 1, 1, "门厅里有一把生锈钥匙。", objectives=["找到钥匙"]),
@@ -70,11 +87,12 @@ def test_spoiler_gate_and_runtime_roundtrip():
     assert restored.current.id == "scene-001"
 
 
-def test_scanned_pdf_requires_ocr(tmp_path):
+def test_scanned_pdf_is_preserved_for_later_vision_analysis(tmp_path):
     path = tmp_path / "scan.pdf"
     build_pdf(path, [""])
-    with pytest.raises(ValueError, match="OCR"):
-        PDFModuleImporter().import_pdf(path)
+    module = PDFModuleImporter().import_pdf(path)
+    assert module.analysis["status"] == "needs-vision"
+    assert "等待 Grok 视觉校正" in module.source_chunks[0].text
 
 
 def test_module_store_can_update_and_delete(tmp_path):
@@ -87,6 +105,18 @@ def test_module_store_can_update_and_delete(tmp_path):
     assert store.get(record.id).module.title == "修订模组"
     store.delete(record.id)
     assert store.list() == []
+
+
+def test_module_store_preserves_and_deletes_source_pdf(tmp_path):
+    path = tmp_path / "source.pdf"
+    build_pdf(path, ["Source PDF must remain available for later vision analysis."])
+    store = ModuleStore(tmp_path / "modules")
+    record = store.import_pdf(path)
+    stored_pdf = store.source_pdf_path(record.id)
+    assert stored_pdf is not None
+    assert stored_pdf.read_bytes() == path.read_bytes()
+    store.delete(record.id)
+    assert not stored_pdf.exists()
 
 
 def test_v1_sections_migrate_to_structured_v2():
@@ -122,6 +152,17 @@ def test_importer_extracts_each_actor_stat_block(tmp_path):
     assert actor.attributes["DEX"] == 70
     assert actor.attributes["HP"] == 9
     assert actor.skills["SpotHidden"] == 55
+
+
+def test_importer_merges_stream_and_visual_actor_extraction():
+    first = ModuleActor("actor-old", "Mia", attributes={"HP": 9}, source_pages=[1])
+    corrected = ModuleActor("actor-new", "Mia", attributes={"DEX": 70}, skills={"潜行": 40}, source_pages=[2])
+    monster = ModuleActor("actor-monster", "Dead Light", kind="monster", armor="6", source_pages=[3])
+    actors = PDFModuleImporter._merge_local_actors([[first], [corrected, monster]])
+    assert [actor.id for actor in actors] == ["actor-001", "actor-002"]
+    assert actors[0].attributes == {"DEX": 70, "HP": 9}
+    assert actors[0].skills["潜行"] == 40
+    assert actors[0].source_pages == [1, 2]
 
 
 def test_local_analysis_stores_nonstandard_monster_combat_block():

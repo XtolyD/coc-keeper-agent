@@ -58,7 +58,9 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     detail_response = client.get(f"/api/modules/{module['id']}")
     assert detail_response.status_code == 200
     detail = detail_response.json()
+    assert detail["source_pdf_available"] is True
     assert detail["module"]["version"] == 2
+    assert detail["module"]["source_name"] == "test.pdf"
     assert detail["module"]["source_chunks"]
     assert detail["module"]["scenes"]
     assert detail["module"]["story"]["nodes"]
@@ -132,11 +134,64 @@ def test_web_can_run_deep_module_analysis(tmp_path, monkeypatch):
     assert detail["module"]["analysis"]["status"] == "complete"
 
 
+def test_web_can_run_grok_visual_cross_analysis(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
+    client = TestClient(web.app)
+    module = client.post(
+        "/api/modules/upload",
+        files={"file": ("vision.pdf", make_pdf(), "application/pdf")},
+        data={"title": "视觉模组"},
+    ).json()
+
+    class VisionResult:
+        pages = ["Corrected visual page with actor statistics and clues."]
+
+        @staticmethod
+        def metadata():
+            return {"provider": "Grok", "model": "grok-4.5", "status": "complete"}
+
+    class StubVision:
+        def __init__(self, _client, **_kwargs):
+            pass
+
+        def extract(self, _path):
+            return VisionResult()
+
+    class StubAnalyzer:
+        def __init__(self, _client, **_kwargs):
+            pass
+
+        def analyze(self, value):
+            value.analysis = {**value.analysis, "mode": "llm", "status": "complete"}
+            return value
+
+    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(is_configured=True))
+    monkeypatch.setattr(web, "GrokVisionSettings", lambda: SimpleNamespace(
+        is_configured=True, model="grok-4.5",
+    ))
+    monkeypatch.setattr(web, "LLMClient", lambda _settings: object())
+    monkeypatch.setattr(web, "GrokPDFVisionExtractor", StubVision)
+    monkeypatch.setattr(web, "LLMModuleAnalyzer", StubAnalyzer)
+    response = client.post(f"/api/modules/{module['id']}/analyze?use_vision=true")
+    assert response.status_code == 202
+    for _ in range(100):
+        status = client.get(f"/api/modules/{module['id']}/analysis").json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.01)
+    assert status["status"] == "completed"
+    detail = client.get(f"/api/modules/{module['id']}").json()
+    chunk = detail["module"]["source_chunks"][0]
+    assert chunk["extraction_method"] == "hybrid-vision"
+    assert "Corrected visual page" in chunk["text"]
+    assert chunk["raw_text"]
+
+
 def test_web_attribute_labels_are_bilingual():
     client = TestClient(web.app)
     page = client.get("/").text
-    assert "/assets/app.js?v=2.0.0" in page
-    assert "/assets/styles.css?v=2.0.0" in page
+    assert "/assets/app.js?v=2.1.0" in page
+    assert "/assets/styles.css?v=2.1.0" in page
     assert 'id="sidebar-toggle"' in page
     script = client.get("/assets/app.js")
     assert script.status_code == 200
@@ -154,5 +209,6 @@ def test_web_attribute_labels_are_bilingual():
     assert "角色与怪物" in script.text
     assert "地点与场景" in script.text
     assert "故事线" in script.text
-    assert "DeepSeek 重新分析" in script.text
+    assert "文本重新分析" in script.text
+    assert "Grok 视觉交叉分析" in script.text
     assert 'method: "DELETE"' in script.text

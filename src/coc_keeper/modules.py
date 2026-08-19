@@ -38,6 +38,14 @@ class ModuleSourceChunk:
     page_start: int
     page_end: int
     text: str
+    raw_text: str = ""
+    extraction_method: str = "text"
+
+    def analysis_text(self) -> str:
+        """Give semantic analysis both sources while gameplay uses corrected ``text``."""
+        if self.raw_text.strip() and self.raw_text.strip() != self.text.strip():
+            return f"【视觉校正文】\n{self.text}\n\n【PDF 文本层原文】\n{self.raw_text}".strip()
+        return self.text
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModuleSourceChunk":
@@ -45,6 +53,8 @@ class ModuleSourceChunk:
             id=str(data["id"]), heading=str(data.get("heading", "原文")),
             page_start=int(data.get("page_start", 0)), page_end=int(data.get("page_end", 0)),
             text=str(data.get("text", "")),
+            raw_text=str(data.get("raw_text", "")),
+            extraction_method=str(data.get("extraction_method", "text")),
         )
 
 
@@ -437,7 +447,14 @@ class PDFModuleImporter:
         self.max_pages_per_section = max(1, int(max_pages_per_section))
         self.max_page_chars = max(1000, int(max_page_chars))
 
-    def import_pdf(self, path: str | Path, *, title: str | None = None) -> KeeperModule:
+    def import_pdf(
+        self,
+        path: str | Path,
+        *,
+        title: str | None = None,
+        page_text_override: list[str] | None = None,
+        extraction_metadata: dict[str, Any] | None = None,
+    ) -> KeeperModule:
         source = Path(path)
         if source.suffix.lower() != ".pdf":
             raise ValueError("模组文件必须是 PDF")
@@ -448,9 +465,20 @@ class PDFModuleImporter:
                 raise ValueError("PDF 没有页面")
             if doc.page_count > self.max_pages:
                 raise ValueError(f"PDF 页数 {doc.page_count} 超过上限 {self.max_pages}")
-            page_text = [doc.load_page(index).get_text("text")[: self.max_page_chars].strip() for index in range(doc.page_count)]
-            if sum(len(text) for text in page_text) < 20:
-                raise ValueError("PDF 未提取到足够文本；扫描版 PDF 请先进行 OCR")
+            stream_page_text = [
+                doc.load_page(index).get_text("text")[: self.max_page_chars].strip()
+                for index in range(doc.page_count)
+            ]
+            raw_page_text = [
+                doc.load_page(index).get_text("text", sort=True)[: self.max_page_chars].strip()
+                for index in range(doc.page_count)
+            ]
+            if page_text_override is not None and len(page_text_override) != doc.page_count:
+                raise ValueError("视觉校正页数与 PDF 页数不一致")
+            page_text = [str(item).strip() for item in page_text_override] if page_text_override is not None else raw_page_text
+            missing_text_layer = sum(len(text) for text in raw_page_text) < 20
+            if page_text_override is None and missing_text_layer:
+                page_text = [f"[第 {index + 1} 页无可提取文本，等待 Grok 视觉校正]" for index in range(doc.page_count)]
             ranges = self._ranges(doc, page_text)
 
         chunks: list[ModuleSourceChunk] = []
@@ -461,13 +489,21 @@ class PDFModuleImporter:
                 f"===== 第 {page + 1} 页 =====\n{page_text[page]}"
                 for page in range(start - 1, end) if page_text[page]
             ).strip()
+            raw_text = "\n".join(
+                f"===== 第 {page + 1} 页 =====\n{raw_page_text[page]}"
+                for page in range(start - 1, end) if raw_page_text[page]
+            ).strip()
             if not text:
                 continue
             chunk_id = f"source-{index:03d}"
             scene_id = f"scene-{index:03d}"
             location_id = f"location-{index:03d}"
             summary = KeeperModule._summarize(text, fallback=heading)
-            chunks.append(ModuleSourceChunk(chunk_id, heading, start, end, text))
+            chunks.append(ModuleSourceChunk(
+                chunk_id, heading, start, end, text,
+                raw_text=raw_text if page_text_override is not None else "",
+                extraction_method="hybrid-vision" if page_text_override is not None else "text",
+            ))
             locations.append(ModuleLocation(
                 location_id, heading, description=summary, source_pages=list(range(start, end + 1)),
             ))
@@ -477,12 +513,20 @@ class PDFModuleImporter:
             ))
         if not scenes:
             raise ValueError("PDF 中没有可用的文本场景")
-        inferred_title = title or self._infer_title(page_text, source.stem)
-        actors = self._extract_stat_blocks(page_text)
+        inferred_title = title or (source.stem if missing_text_layer and page_text_override is None else self._infer_title(page_text, source.stem))
+        actor_sets = [self._extract_stat_blocks(stream_page_text)]
+        if page_text != stream_page_text:
+            actor_sets.append(self._extract_stat_blocks(page_text))
+        actors = self._merge_local_actors(actor_sets)
         return KeeperModule(
             inferred_title, source.name, scenes, actors=actors, locations=locations,
             source_chunks=chunks, story=StoryGraph.linear(scenes),
-            analysis={"mode": "local", "status": "needs-review", "schema": 2},
+            analysis={
+                "mode": "local",
+                "status": "needs-vision" if missing_text_layer and page_text_override is None else "needs-review",
+                "schema": 2,
+                **({"vision": dict(extraction_metadata or {})} if page_text_override is not None else {}),
+            },
         )
 
     def _ranges(self, doc: pymupdf.Document, page_text: list[str]) -> list[tuple[str, int, int]]:
@@ -512,6 +556,30 @@ class PDFModuleImporter:
                 cursor = part_end + 1
                 part += 1
         return ranges
+
+    @staticmethod
+    def _merge_local_actors(actor_sets: list[list[ModuleActor]]) -> list[ModuleActor]:
+        merged: list[ModuleActor] = []
+        by_name: dict[str, ModuleActor] = {}
+        for actors in actor_sets:
+            for actor in actors:
+                key = actor.name.strip().lower()
+                if not key or re.search(r"\d|%|技能|攻击方式", actor.name):
+                    continue
+                if key in by_name:
+                    current = by_name[key]
+                    current.attributes = {**actor.attributes, **current.attributes}
+                    current.skills = {**actor.skills, **current.skills}
+                    if not current.attacks:
+                        current.attacks = actor.attacks
+                    current.armor = current.armor or actor.armor
+                    current.sanity_loss = current.sanity_loss or actor.sanity_loss
+                    current.source_pages = _int_list(current.source_pages + actor.source_pages)
+                    continue
+                actor.id = f"actor-{len(merged) + 1:03d}"
+                by_name[key] = actor
+                merged.append(actor)
+        return merged
 
     @staticmethod
     def _infer_title(page_text: list[str], fallback: str) -> str:

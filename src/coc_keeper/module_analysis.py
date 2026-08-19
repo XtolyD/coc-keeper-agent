@@ -50,6 +50,8 @@ ANALYSIS_SYSTEM_PROMPT = """你是《克苏鲁的呼唤》第七版模组结构�
 3. 剧情大纲和分支只放在 story；场景不得承担先后顺序。
 4. 每个引用 ID 必须真实存在；节点可以引用同一场景以表达不同剧情状态。
 5. 不能确定的数据用空字符串、空数组或省略对应属性，绝不猜测。
+6. 如果输入同时包含“视觉校正文”和“PDF 文本层原文”，用视觉校正文确定阅读顺序和表格结构，
+   用文本层原文核对专有名词与数值；两者冲突且无法判断时必须保留不确定性，不能自行编造。
 """
 
 
@@ -84,7 +86,7 @@ class LLMModuleAnalyzer:
         self.progress = progress or (lambda _stage: None)
 
     def analyze(self, module: KeeperModule) -> KeeperModule:
-        source = "\n\n".join(chunk.text for chunk in module.source_chunks if chunk.text)
+        source = "\n\n".join(chunk.analysis_text() for chunk in module.source_chunks if chunk.text)
         if not source.strip():
             raise ValueError("模组没有可供分析的 PDF 原文")
         if len(source) > self.max_source_chars:
@@ -110,7 +112,7 @@ class LLMModuleAnalyzer:
         batches = [module.source_chunks[index:index + 2] for index in range(0, len(module.source_chunks), 2)]
         for batch_index, chunks in enumerate(batches, 1):
             self.progress(f"正在分析场景 {batch_index}/{len(batches)}")
-            batch_source = "\n\n".join(chunk.text for chunk in chunks if chunk.text)
+            batch_source = "\n\n".join(chunk.analysis_text() for chunk in chunks if chunk.text)
             try:
                 batch_payload, batch_usage = self._request(
                     module, batch_source,
@@ -131,7 +133,10 @@ class LLMModuleAnalyzer:
         ]
         story_source = json.dumps({
             "scenes": [
-                {key: item.get(key) for key in ("id", "keeper_title", "summary", "objectives", "secrets")}
+                {key: item.get(key) for key in (
+                    "id", "keeper_title", "summary", "entry_conditions", "exits",
+                    "clues", "events", "objectives", "secrets",
+                )}
                 for item in scene_payload.get("scenes", []) if isinstance(item, dict)
             ]
         }, ensure_ascii=False)
@@ -163,6 +168,7 @@ class LLMModuleAnalyzer:
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
         }
         refined.analysis = {
+            **dict(module.analysis),
             "mode": "llm", "status": "partial" if warnings else "complete", "schema": 2,
             "model": self.client.settings.model,
             "analyzed_at": datetime.now(timezone.utc).isoformat(),

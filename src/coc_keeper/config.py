@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 # 项目根目录（coc-keeper-agent）= 本文件上三级
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,18 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+
+
+def _openai_base_url(value: str) -> str:
+    """Accept a provider origin, an OpenAI base URL, or a full completions URL."""
+    raw = str(value).strip().rstrip("/")
+    parts = urlsplit(raw)
+    path = parts.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        path = path.removesuffix("/chat/completions")
+    if not path:
+        path = "/v1"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
 
 
 @dataclass
@@ -71,3 +84,29 @@ class Settings:
     def describe(self) -> str:
         """返回不包含密钥的模型摘要，用于日志展示。"""
         return f"model={self.model} context_window={self.context_window} base_url={self.base_url}"
+
+
+@dataclass
+class GrokVisionSettings:
+    """Grok-compatible vision endpoint used only for PDF page correction."""
+
+    model: str = field(default_factory=lambda: os.environ.get("GROK_MODEL", "grok-4.5"))
+    base_url: str = field(default_factory=lambda: _openai_base_url(
+        os.environ.get("GROK_API", "https://api.x.ai/v1")
+    ))
+    api_key: str = field(default_factory=lambda: os.environ.get("GROK_API_KEY", ""))
+    max_tokens: int = field(default_factory=lambda: int(os.environ.get("GROK_VISION_MAX_TOKENS", "8000")))
+    temperature: float = 0.0
+    request_timeout: float = field(default_factory=lambda: float(os.environ.get("GROK_VISION_TIMEOUT", "300")))
+    max_retries: int = 2
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.model and self.base_url and self.api_key)
+
+    @property
+    def requires_reasoning_content(self) -> bool:
+        return False
+
+    def describe(self) -> str:
+        return f"model={self.model} base_url={self.base_url}"

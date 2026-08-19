@@ -25,11 +25,12 @@ from .character import (
     base_skill_values, generate_character_candidates,
 )
 from .character_store import CharacterStore
-from .config import PROJECT_ROOT, Settings
+from .config import GrokVisionSettings, PROJECT_ROOT, Settings
 from .game_store import GameRecord, GameStore, TranscriptEntry
 from .module_analysis import LLMModuleAnalyzer
 from .module_store import ModuleStore
-from .modules import KeeperModule, ModuleRuntime
+from .modules import KeeperModule, ModuleRuntime, PDFModuleImporter
+from .pdf_vision import GrokPDFVisionExtractor
 from .occupations import (
     get_occupation, interest_point_budget, list_occupations,
 )
@@ -100,16 +101,17 @@ class WebService:
     def character_payload(record) -> dict[str, Any]:
         return record.to_dict()
 
-    @staticmethod
-    def module_payload(record) -> dict[str, Any]:
+    def module_payload(self, record) -> dict[str, Any]:
         summary = record.summary()
-        return {key: summary[key] for key in ("id", "title", "source_name", "pages", "created_at")}
+        payload = {key: summary[key] for key in ("id", "title", "source_name", "pages", "created_at")}
+        payload["source_pdf_available"] = self.modules.source_pdf_path(record.id) is not None
+        return payload
 
-    @staticmethod
-    def module_detail_payload(record) -> dict[str, Any]:
+    def module_detail_payload(self, record) -> dict[str, Any]:
         return {
             "id": record.id,
             "created_at": record.created_at,
+            "source_pdf_available": self.modules.source_pdf_path(record.id) is not None,
             "module": record.module.to_dict(),
         }
 
@@ -135,7 +137,7 @@ class WebService:
 
 
 service = WebService()
-app = FastAPI(title="CoC Keeper", version="2.0.0")
+app = FastAPI(title="CoC Keeper", version="2.1.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -160,11 +162,13 @@ def index():
 @app.get("/api/status")
 def status():
     settings = Settings()
+    vision = GrokVisionSettings()
     return {
         "configured": settings.is_configured,
         "model": settings.model,
         "context_window": settings.context_window,
         "provider": "DeepSeek" if "deepseek" in settings.base_url.lower() else settings.base_url,
+        "vision": {"configured": vision.is_configured, "provider": "Grok", "model": vision.model},
     }
 
 
@@ -278,24 +282,45 @@ def update_module(module_id: str, request: ModuleUpdateRequest):
 
 
 @app.post("/api/modules/{module_id}/analyze", status_code=202)
-def analyze_module(module_id: str):
+def analyze_module(module_id: str, use_vision: bool = False):
     settings = Settings()
     if not settings.is_configured:
         raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API，无法进行模组深度分析")
-    service.modules.get(module_id)
+    vision_settings = GrokVisionSettings()
+    record = service.modules.get(module_id)
+    source_pdf = service.modules.source_pdf_path(module_id)
+    if use_vision and not vision_settings.is_configured:
+        raise HTTPException(status_code=503, detail="尚未配置 GROK_API 和 GROK_API_KEY，无法进行视觉校正")
+    if use_vision and source_pdf is None:
+        raise HTTPException(status_code=409, detail="该旧模组未保留原始 PDF，请重新上传后再使用视觉校正")
     current = service.analysis_jobs.get(module_id)
     if current and current.get("status") == "running":
         return current
-    job = {"module_id": module_id, "status": "running", "stage": "准备分析", "error": None}
+    job = {
+        "module_id": module_id, "status": "running", "stage": "准备分析", "error": None,
+        "use_vision": use_vision,
+    }
     service.analysis_jobs[module_id] = job
 
     def run_analysis() -> None:
         try:
             record = service.modules.get(module_id)
+            module = record.module
+            if use_vision:
+                result = GrokPDFVisionExtractor(
+                    LLMClient(vision_settings), progress=lambda stage: job.update(stage=stage),
+                ).extract(source_pdf)
+                module = PDFModuleImporter().import_pdf(
+                    source_pdf,
+                    title=record.module.title,
+                    page_text_override=result.pages,
+                    extraction_metadata=result.metadata(),
+                )
+                module.source_name = record.module.source_name
             analyzer = LLMModuleAnalyzer(
                 LLMClient(settings), progress=lambda stage: job.update(stage=stage),
             )
-            module = analyzer.analyze(record.module)
+            module = analyzer.analyze(module)
             service.modules.save(module_id, module)
             job.update(status="completed", stage="分析完成", analysis=module.analysis)
         except Exception as exc:  # noqa: BLE001 - invalid analysis must not overwrite the stored module
@@ -342,7 +367,9 @@ async def upload_module(file: UploadFile = File(...), title: str | None = Form(d
         temporary.write(content)
         temp_path = Path(temporary.name)
     try:
-        return service.module_payload(service.modules.import_pdf(temp_path, title=title or Path(file.filename).stem))
+        record = service.modules.import_pdf(temp_path, title=title or Path(file.filename).stem)
+        record.module.source_name = Path(file.filename).name
+        return service.module_payload(service.modules.save(record.id, record.module))
     finally:
         temp_path.unlink(missing_ok=True)
 
