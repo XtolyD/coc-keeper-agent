@@ -118,9 +118,20 @@ LangGraph，才能理解框架替你做了什么。
 | LLM | DeepSeek（`.env` 的 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`） | 走 OpenAI 兼容 API，换供应商只改 `.env` |
 | Agent 框架 | 先手写循环，后 LangGraph | 学透核心机制，再理解框架封装 |
 | RAG | 先 BM25，后向量 | 零依赖起步，理解检索本质，再做对比 |
+| 中文分词 | 字级 unigram，不引词典 | 零依赖、可解释；CoC 规则文本结构化（STR/专名），字级 BM25 已足够 |
 | 状态建模 | dataclass（规则）→ Pydantic（Agent 结构化输出） | 规则引擎零依赖，Agent 层需要校验与 schema |
 | 结构化输出 | JSON schema / tool calling | 保证工具参数合法、结果可解析 |
+| 模组抽取 | 每页「文本+视觉」双轨 | 模组常含地图/角色卡等无文字层页，须视觉识别；文本层供交叉校验 |
+| 视觉模型 | `deepseek-v4-flash-vision-exp` | 官方视觉模型，支持按需 thinking、JSON 输出 |
 | 界面 | CLI 先行 | 聚焦核心逻辑，UI 留到 M5 |
+
+### 4.1 模组识别（Mod）决策依据
+
+视觉模型 `deepseek-v4-flash-vision-exp` 为推理型，`max_tokens` 计入思考 token。
+若 `thinking` 开启且 `max_tokens` 过小，思考会先耗尽预算致返回空内容；
+若强制 `disabled` 则模型永不思考（过保守）。故**不传 `thinking`（默认，模型按需思考）
+且 `max_tokens = 393216`**（API 上限）——模型「够用即停」不浪费，思考长也不截断。
+参数为实测验证的定案，规范见 `docs/module-spec.md` §2。
 
 ## 5. 一回合的数据流（示例：玩家开枪）
 
