@@ -32,7 +32,8 @@ coc-keeper-agent/
 ├── conftest.py               # pytest：src 导入路径 + 脚本化 RNG
 ├── docs/
 │   ├── design.md             # 架构设计
-│   └── learning-plan.md      # 学习路线与里程碑
+│   ├── learning-plan.md      # 学习路线与里程碑
+│   └── retrieval-spec.md     # 规则检索规范（BM25/分词/字段加权/接口）
 ├── scripts/
 │   ├── extract_rules.py      # 规则书：梳理 + 清洗 + 实体分块 + 二次存储
 │   ├── verify_rulebook.py    # 清洗层完整性校验（无正文丢失）
