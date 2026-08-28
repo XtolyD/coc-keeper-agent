@@ -127,6 +127,19 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
             "SAN": f"{c.san}/{c.san_max}", "LUCK": c.luck,
         }
 
+    def _search_rules(query: str, type: str = "", top_k: int = 5) -> dict:
+        from ..retrieval import _default_index, search_rules as _sr
+
+        # 复用进程内缓存索引，避免重复构建
+        idx = _default_index()
+        hits = _sr(query, top_k=top_k, type=type or None, index=idx)
+        if not hits:
+            return {"message": "未找到相关规则", "query": query}
+        return {
+            "query": query, "type_filter": type or None, "count": len(hits),
+            "hits": [h.to_dict() for h in hits],
+        }
+
     handlers = {
         "create_character": _create_character,
         "get_character": _get_character,
@@ -135,6 +148,7 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
         "luck_check": _luck_check,
         "sanity_check": _sanity_check,
         "update_character": _update_character,
+        "search_rules": _search_rules,
     }
 
     def dispatch(name: str, arguments: Any) -> dict:
@@ -249,6 +263,23 @@ TOOLS_SCHEMA: list[dict] = [
                     "delta_san": {"type": "integer", "description": "SAN 变化量"},
                     "delta_luck": {"type": "integer", "description": "幸运变化量"},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_rules",
+            "description": "检索规则书（CoC 7th），返回相关规则块及其页号。玩家不确定规则/判定依据时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "查询内容，如 奖励骰/闪避/理智检定/食尸鬼"},
+                    "type": {"type": "string", "enum": ["rule", "skill", "combat", "monster", "spell", "tome", "table", "glossary"],
+                               "description": "（可选）限定实体类型，不传则全库检索"},
+                    "top_k": {"type": "integer", "description": "返回条数，默认5"},
+                },
+                "required": ["query"],
             },
         },
     },

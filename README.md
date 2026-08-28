@@ -57,6 +57,11 @@ coc-keeper-agent/
 │   ├── character.py          # 角色卡：属性、衍生属性、技能、建卡
 │   ├── rules/
 │   │   └── checks.py         # 检定：技能/对抗/幸运/理智
+│   ├── retrieval/            # 规则检索（M2）：字级 BM25 + 字段加权
+│   │   ├── tokenizer.py      #   字级分词 + 全角归一
+│   │   ├── bm25.py           #   自实现 BM25（纯函数）
+│   │   ├── index.py          #   由 rules_chunks.json 构建索引
+│   │   └── search.py         #   search_rules 查询接口（可解释命中）
 │   └── agent/                # KP Agent（M3）
 │       ├── llm.py            #   OpenAI 兼容客户端
 │       ├── tools.py          #   工具 schema + 规则引擎绑定
@@ -108,7 +113,7 @@ python -m coc_keeper.cli
 | --- | --- | --- | --- |
 | M0 | 规则引擎核心 | 骰子、角色卡、技能/对抗/幸运/理智检定 | ✅ 已完成 |
 | M1 | 规则引擎扩展 | 战斗、伤害、疯狂发作状态机、追逐 | ⏳ 待开始 |
-| M2 | 规则检索 RAG | 规则书清洗/分块（实体/技能/法术）+ BM25 索引 + `search_rules` | 🚧 语料就绪，BM25 检索待做 |
+| M2 | 规则检索 RAG | 规则书清洗/实体分块 + 自实现字级 BM25 + `search_rules`（可解释命中） | ✅ 已完成 |
 | M3 | KP Agent 核心 | 工具调用循环（DeepSeek）、记忆、单人跑团 | 🚧 代码完成，待接入 DeepSeek 冒烟测试 |
 | M4 | 多人跑团 | 多人会话、完整战役状态持久化 | ⏳ 待开始 |
 | M5 | 工程化 | 评估、可观测性、成本与安全、CLI/界面 | ⏳ 待开始 |
