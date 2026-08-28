@@ -21,10 +21,13 @@ from typing import Callable, Optional
 from ..docparser.result import Block
 
 # 噪声块类型（页眉/脚注/页码，不参与内容/检索）
-_NOISE_TYPES = {"header", "page_footnote", "page_number"}
+_NOISE_TYPES = {"header", "page_footnote", "page_number", "footer"}
 
 # 特殊块类型（独立成块，不进正文累积）
-_SPECIAL_TYPES = {"table", "image"}
+_SPECIAL_TYPES = {"table", "image", "equation"}
+
+# 作为正文累积的 text 类型（ref_text 等并入正文）
+_TEXT_TYPES = {"text", "ref_text"}
 
 
 @dataclass
@@ -40,6 +43,7 @@ class Chunk:
     path: str = ""            # 章节路径（由标题栈重建）
     order: int = 0
     lines: list[str] = field(default_factory=list)
+    img_path: str = ""         # 图片相对路径（type=image 时，供 vision 分析）
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +51,7 @@ class Chunk:
             "text": self.text, "page": self.page,
             "start_page": self.start_page, "end_page": self.end_page,
             "path": self.path, "order": self.order, "lines": list(self.lines),
+            "img_path": self.img_path,
         }
 
 
@@ -152,11 +157,14 @@ def chunk_content_list(blocks: list[Block], type_fn: Optional[TypeFn] = None) ->
                 start_page=b.page_idx + 1, end_page=b.page_idx + 1,
                 path="/".join(t for _, t in stack), order=order,
                 lines=[b.text] if b.text else [],
+                img_path=b.img_path,
             ))
             order += 1
             continue
 
-        # 正文 text 块（lvl 空）
+        # 正文 text 块（lvl 空）；ref_text 等其他文本类型并入正文
+        if b.type not in _TEXT_TYPES:
+            continue
         if not b.text.strip():
             continue
         path = "/".join(t for _, t in stack)

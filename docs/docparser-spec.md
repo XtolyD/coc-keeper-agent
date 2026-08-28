@@ -144,10 +144,12 @@ class MinerUClient:
 
 ## 8. 验收标准
 
-- `parse_pdf("data/models/入门套装：模组追书人.pdf")`：
+- 对**任意** PDF：`parse_pdf(<pdf_path>)`：
   - 返回 ParseResult，`blocks` 非空，含 `type/page_idx/text_level/bbox`。
   - `markdown` 非空，`images_dir` 含 MinerU 抽出的图片。
 - `type=image` 的块存在（地图/插图被正确识别为 image 而非 text）。
 - 单测：MinerUClient 用 mock 的 requests 验证「申请→上传→轮询→下载」调用链；
   纯函数（Block 解析、state 判定）可单测、可复现。
 - 密钥不打印；无硬编码 base_url/key。
+
+> 「任意 PDF」指：spec 不绑定特定模组名，验收以上传的真实模组/规则书为准（见 `data/models/`）。

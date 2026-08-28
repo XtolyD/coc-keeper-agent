@@ -65,9 +65,12 @@ def test_chunk_table_and_image_standalone():
     blocks = [
         B("text", "第一章", text_level="1", page_idx=0),
         B("table", "表Ⅰ：伤害加值表", text_level="", page_idx=3),
-        B("image", "", text_level="", page_idx=5),
+        B("image", "", text_level="", page_idx=5, bbox=None),
         B("text", "正文", text_level="", page_idx=5),
     ]
+    # image 块带 img_path
+    blocks[2] = B("image", "", text_level="", page_idx=5, bbox=None)
+    blocks[2].img_path = "images/x.jpg"
     chunks = chunk_content_list(blocks)
     types = [c.type for c in chunks]
     assert "table" in types and "image" in types
@@ -76,6 +79,7 @@ def test_chunk_table_and_image_standalone():
     assert tbl.page == 4  # page_idx=3 → 页码 4
     img = next(c for c in chunks if c.type == "image")
     assert img.page == 6
+    assert img.img_path == "images/x.jpg"  # img_path 保留，供 vision
 
 
 # ---- 跨页：正文累积，start/end 页正确 --------------------------------------
@@ -122,6 +126,29 @@ def test_chunk_default_type_is_rule():
               B("text", "正文内容", text_level="", page_idx=0)]
     chunks = chunk_content_list(blocks)
     assert all(c.type == "rule" for c in chunks)
+
+
+def test_chunk_ref_text_accumulates_as_body():
+    # ref_text 等文本类型并入正文累积（非独立块、非噪声）
+    blocks = [
+        B("text", "章节", text_level="1", page_idx=0),
+        B("ref_text", "参考文本内容", text_level="", page_idx=0),
+    ]
+    chunks = chunk_content_list(blocks)
+    assert len(chunks) == 1
+    assert chunks[0].text == "章节\n参考文本内容"
+
+
+def test_chunk_footer_and_equation():
+    # footer 噪声跳过；equation 独立成块
+    blocks = [
+        B("text", "章", text_level="1", page_idx=0),
+        B("footer", "页脚", text_level="", page_idx=0),
+        B("equation", "E=mc^2", text_level="", page_idx=0),
+    ]
+    chunks = chunk_content_list(blocks)
+    assert any(c.type == "equation" for c in chunks)
+    assert all(c.text != "页脚" for c in chunks)  # footer 被跳过
 
 
 # ---- Chunk 序列化 -----------------------------------------------------------

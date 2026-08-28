@@ -60,11 +60,13 @@
 
 ### 3.2 规则检索 RAG（M2）
 
-第一阶段用 **BM25**（纯 Python，`rank_bm25`），不引入 embedding 服务：
+第一阶段用 **BM25**（自实现纯 Python），不引入 embedding 服务：
 - 好处：零外部依赖、零模型下载、可解释（能看到命中哪段规则），便于学习检索本质。
-- 数据源：`data/rulebook/rules_pages/*.txt`（每页一份的**清洗后**文本，页号即出处）与
-  `rules_structure.json`（按 TOC 分层 + 页区间）。由 `scripts/extract_rules.py --build`
-  一次性离线生成，`scripts/verify_rulebook.py` 校验无正文丢失（仅删去章节标题/页码/译者/引文署名等噪声）。
+- **解析**：MinerU API（`docparser/`）把规则书 PDF → 结构化 content_list（块/层级/页号/坐标），
+  再 `segments/` 按 text_level 分块，产出 `rules_chunks.json`（供 `retrieval` 消费）。
+- 由 `scripts/extract_rules_mineru.py` 离线一次性生成（分批解析 380 页），检索运行时只加载 
+  `rules_chunks.json`。
+- 旧 pymupdf 几何管道（`rulebook.py` 等）已弃用，由 MinerU 解决版面理解（告别几何补丁）。
 
 第二阶段（可选）升级为**向量检索**（分块 + 中文 embedding + 向量库），对比
 BM25 与语义检索在规则查询上的差异。规则查询的难点在于：CoC 规则高度结构化
@@ -118,6 +120,7 @@ LangGraph，才能理解框架替你做了什么。
 | LLM | DeepSeek（`.env` 的 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`） | 走 OpenAI 兼容 API，换供应商只改 `.env` |
 | Agent 框架 | 先手写循环，后 LangGraph | 学透核心机制，再理解框架封装 |
 | RAG | 先 BM25，后向量 | 零依赖起步，理解检索本质，再做对比 |
+| PDF 解析 | MinerU（docparser）+ 手动分块（segments） | 专业版面理解（双栏/表格/图片/层级），告别几何启发式补丁 |
 | 中文分词 | 字级 unigram，不引词典 | 零依赖、可解释；CoC 规则文本结构化（STR/专名），字级 BM25 已足够 |
 | 状态建模 | dataclass（规则）→ Pydantic（Agent 结构化输出） | 规则引擎零依赖，Agent 层需要校验与 schema |
 | 结构化输出 | JSON schema / tool calling | 保证工具参数合法、结果可解析 |

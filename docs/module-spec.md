@@ -9,8 +9,8 @@
 `ModuleExtractor.extract(pdf_path)` 从**一个模组 PDF** 抽取结构化数据，供 KP Agent
 主持特定模组时引用。支持**多个模组**分别解析，且**可重复、稳定**地调用。
 
-**核心难点**：模组 PDF 常含**无文字层的图片页**（地图、角色卡、插图、附录图），
-纯文本解析无法提取。黑水溪 58 页中 18 页无文字（含地图 p8、角色卡 p46）。
+**核心难点**：模组 PDF 常含**无文字层的图片页**（地图、角色卡、插图等），
+纯文本解析无法提取，须用 DeepSeek 视觉分析 MinerU 抽出的图片块。
 
 ## 1. 架构（MinerU + vision）
 
@@ -99,7 +99,7 @@ def extract_module(pdf_path: str, *, out_path: str | None = None) -> ModuleDocum
     """解析一个模组 PDF，返回结构化数据；可选落盘 JSON。"""
 
 def extract_batch(pdf_paths: list[str], out_dir: str | None = None) -> list[ModuleDocument]:
-    """批量解析多个模组（黑水溪 / 追书人等）。"""
+    """批量解析多个模组（任意上传的模组 PDF）。"""
 ```
 
 - `extract_batch` 支持用户从 `data/models/` 一次上传/解析多个 PDF。
@@ -108,18 +108,20 @@ def extract_batch(pdf_paths: list[str], out_dir: str | None = None) -> list[Modu
 
 ## 7. 风险与边界
 
-- **成本**：全页视觉+文本双轨，视觉调用量大（已确认不考虑成本控制）。
-- **OCR 误差**：角色名/数值可能与原文有出入。文字层存在时以文字层为准，视觉仅补缺失页并交叉校验。
+- **成本**：每个 image 块都交视觉（已确认不考虑成本控制）。
+- **OCR 误差**：角色名/数值可能与原文有出入。MinerU text 块为准，视觉补图片块并交叉校验。
 - **敏感内容**：模组可能含恐怖/暴力文本，仅本地解析供 KP 使用，不作公开数据。
 - **PDF 源不提交**：`data/**/*.pdf` 已 gitignore（版权源），产出 JSON 也 gitignore。
+- **spec 不绑定模组**：规范用占位符，验收以上传的真实模组为准（见 `data/models/`）。
 
 ## 8. 验收标准（对齐「可重复 + 稳定」）
 
-- `extract_module("data/models/入门套装：模组追书人.pdf")`：19 页全部抽取，产出
-  结构化文档且**重跑结果一致**（幂等）。
-- `extract_module("data/models/[COC模组翻译]黑水溪-Blackwater Creek.pdf")`：
-  - 文字层页（40页）文本非空；
-  - **图片页**（地图 p8 识别出地名列表；角色卡 p46 识别出属性/技能 JSON）；
-  - 单页失败不影响整体（注入坏页仍能返回其余页）。
+- 对**任意**上传的模组 PDF：`extract_module(<pdf_path>)` 产出 ModuleDocument 且
+  **重跑结果一致**（幂等）。
+- text 块：MinerU 文本非空（不消耗视觉）；image 块：`img_path` 存在且触发视觉。
+- **图片块**可识别：地图抽出地名、角色卡抽出属性/技能 JSON、插图给出描述。
+- 单图失败不影响整体：某 image 块识别失败，其余页/块仍返回。
 - `extract_batch([...])` 一次处理多个模组，各自独立输出。
-- 纯函数（`pdf_reader` / schema）有单元测试；视觉调用走 mock，不依赖真实网络。
+- 纯函数（schema / extract_from_result）有单元测试；视觉调用走 mock，不依赖真实网络。
+
+> 「任意模组」指：spec 不绑定具体模组名，验收以上传的真实模组为准（见 `data/models/`）。

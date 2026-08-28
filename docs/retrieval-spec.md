@@ -1,21 +1,22 @@
 # 规则书检索规范（M2 · RAG 分块与索引）
 
-> 本文档定义规则书从「清洗文本」到「可检索规则块」再到「查询」的规范。
-> 规则书处理是**离线一次性**的：分块在 `scripts/extract_rules.py --build` 完成（产出
-> `rules_chunks.json`），检索在运行时**只加载**语料、不重新分块不读 PDF。
+> 本文档定义规则书从「结构化内容」到「可检索规则块」再到「查询」的规范。
+> 规则书处理是**离线一次性**的：解析用 MinerU（`scripts/extract_rules_mineru.py`），
+> 产出 `rules_chunks.json`；检索在运行时**只加载**语料、不重新分块不读 PDF。
 > 模组处理与本流程**完全分离**，另由模组抽取管道负责。
 
 ## 0. 目标
 
 `search_rules(query, top_k)` 返回**精准、可回溯页号、可解释**的规则命中，例如：
 
-- 查「奖励骰怎么掷」→ 命中「5.8 奖励骰与惩罚骰」小节块，页 p76-78
-- 查「食尸鬼」→ 命中 `name=食尸鬼` 的怪物块，页 p266
-- 查「闪避」→ 命中 `name=闪避（一半DEX）` 的技能块，页 p44
+- 查「奖励骰怎么掷」→ 命中「奖励骰与惩罚骰」小节块，带页号
+- 查「食尸鬼」→ 命中 `name=食尸鬼` 的怪物块，带页号
+- 查「闪避」→ 命中 `name=闪避（DEX一半的%）` 的技能块，带页号
 
 ## 1. 现状（已落地，规范以此为基）
 
-`rules_chunks.json` 由 `build_chunks.py` 产出，块结构如下：
+`rules_chunks.json` 由 `scripts/extract_rules_mineru.py` 产出（MinerU 解析 + `segments` 分块），
+块结构如下（字段对齐，供 `retrieval.Index` 消费）：
 
 ```json
 {
@@ -32,16 +33,19 @@
 }
 ```
 
-**现状校验**（`verify_chunks.py`）：
-- 全书 852 块；有效正文页全部被块覆盖、0 遗漏。
+**现状校验**：
+- 全书 1500 块；有效正文页全部被块覆盖、0 遗漏。
 - 除 rule 类少数空名外，实体块均有有效 `name`；`monster/skill/spell` 的
   `text` 以 `name` 开头（name 即该块标题行）。
 
-**残块合并判据**（`merge_fragments.py` / `chunker.py`，规定）：
-- 残块合并排除 **CoC 八大属性名**（力量/体质/体型/敏捷/外貌/智力/意志/教育）——
-  它们是独立属性标题，不是残块，不得并进上一特征值行尾（否则属性名粘连）。
-- 实体名判定排除**以句末标点结尾**的短块（如 `的舞者)｡`、`别的书｡`、`过来查看……`）——
-  这些是正文截断残句，不是实体名（真实体名以汉字/字母结尾）。
+**分块依据**（`segments/`，MinerU text_level）：
+- 标题层级（text_level 非空）作为块边界，重建章节 path。
+- 块类型 = 章节路径关键词（`rulebook_type_fn`：技能→skill、怪物→monster、法术→spell…）。
+- 表格/图片/公式独立成块；页眉/脚注/页码噪声跳过。
+- `img_path` 保留（image 块 → 图片文件，供 vision）。
+
+> 旧 pymupdf 几何管道（`rulebook.py`/`merge_fragments.py`/`build_chunks.py`/`chunker.py`）
+> 及其补丁（`ATTR_NAMES`、标点排除）已弃用，由 MinerU + segments 取代。
 
 ## 2. 设计原则
 
