@@ -42,9 +42,10 @@ class Settings:
     预期在 .env 中声明以下变量（换任何 OpenAI 兼容供应商都只需改这三个）：
         DEEPSEEK_API_KEY   （密钥，必填）
         DEEPSEEK_BASE_URL  （默认 https://api.deepseek.com）
-        DEEPSEEK_MODEL     （默认 deepseek-chat）
+        DEEPSEEK_MODEL     （默认 deepseek-v4-flash-vision-exp）
     """
-    model: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"))
+    # 全项目统一使用的模型（视觉/多模态能力）。
+    model: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash-vision-exp"))
     base_url: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     api_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
 
