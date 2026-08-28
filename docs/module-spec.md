@@ -10,18 +10,21 @@
 主持特定模组时引用。支持**多个模组**分别解析，且**可重复、稳定**地调用。
 
 **核心难点**：模组 PDF 常含**无文字层的图片页**（地图、角色卡、插图、附录图），
-纯文本解析（pymupdf `get_text`）无法提取。黑水溪 58 页中 18 页无文字（含地图 p8、
-角色卡 p46），必须用 DeepSeek 视觉模型识别。
+纯文本解析无法提取。黑水溪 58 页中 18 页无文字（含地图 p8、角色卡 p46）。
 
-## 1. 架构
+## 1. 架构（MinerU + vision）
 
-**每页统一「文本读取 + 视觉验证」双轨，不做成本控制。**
+**MinerU 做版面理解，DeepSeek 视觉做图片分析。**
 
-对每一页：
-1. **文本读取**：pymupdf `get_text()` 抽取文字层（无则空）。
-2. **视觉验证**：该页渲染成图片 → DeepSeek 视觉模型识别。
+流程：
+1. **docparser（MinerU）**：`parse_pdf` 解析 PDF → `ParseResult`（content_list
+   text 块/图片块 + images/）。
+2. **text 块**：直接用 MinerU 文本（不消耗视觉）。
+3. **image 块**：取 `img_path` → DeepSeek 视觉识别（地图地名/角色卡数值/插图描述），
+   失败不中断整本。
 
-视觉用于补全文字层缺失的地图/角色卡/插图，并与文字层交叉校验；冲突时以文字层为准。
+`ModuleExtractor` 以 `ParseResult` 为输入（`extract_from_result`），纯逻辑可测。
+不做成本控制：每个 image 块都交视觉。
 
 ## 2. 视觉调用约束（必须遵守）
 
@@ -39,61 +42,53 @@
 ```
 src/coc_keeper/module/
 ├── __init__.py        # 对外暴露 ModuleExtractor / extract_module
-├── pdf_reader.py      # pymupdf：render_pages 逐页渲染 PNG + 抽文字层
-├── schema.py          # ModuleDocument / Page 数据类（结构化）
-├── vision.py          # VisionClient：recognize_page/map/character → JSON
-└── extractor.py       # 编排：逐页 文本+视觉 → 合并 → ModuleDocument
+├── schema.py          # ModuleDocument 数据类（结构化）
+└── extractor.py       # 编排：docparser ParseResult → 逐块 text/画像 → ModuleDocument
 ```
 
+依赖的外部层（均为独立能力）：
+- `docparser/`：MinerU 解析（`parse_pdf` → ParseResult）。
+- `vision/`：DeepSeek 视觉（`VisionClient` 分析 image 块）。
+- `segments/`：语义分块（如需从 ParseResult 分块检索，可选）。
+
 - `agent/tools.py` 通过 `extract_module(path)` 薄封装调用（供 LLM 加载模组）。
-- 视觉客户端复用 `config.Settings` 与 `openai` SDK，不引入新依赖。
-- `pdf_reader.py` / `schema.py` 为纯逻辑，**可单测**；`vision.py` 只依赖 LLM。
+- `extractor.py` 可注入 mock `VisionClient` 供单测（不联网）。
 
 ## 4. 数据结构（schema.py）
 
 ```python
 @dataclass
-class Page:
-    index: int                  # 0 起 PDF 页序
-    text: str                   # 文字层内容（pymupdf get_text，可为空）
-    image_path: str             # 渲染出的 PNG 路径（供视觉复用/审计）
-    visual: dict | None = None  # 视觉识别结果（map/character/description）
-    content_type: str           # "text" | "map" | "character" | "illustration" | "table"
-```
-
-```python
-@dataclass
 class ModuleDocument:
     source_pdf: str             # 原 PDF 文件名
-    title: str | None = None    # 模组名（视觉/文本识别）
-    pages: list[Page] = ...
-    summary: str = ...          # 总览：本模组剧情一句话
+    title: str | None = None    # 模组名（文本/视觉识别）
+    summary: str = ""           # 剧情一句话总览
     npcs: list[str] = ...       # 提取到的 NPC 名
     locations: list[str] = ...  # 提取到的地点名
     monsters: list[str] = ...   # 怪物/生物
     sanity_threats: list[str] = ...  # 理智威胁点
-    extracted_at: str = ...     # ISO 时间戳
+    extracted_at: str = ""     # ISO 时间戳
+    image_results: list[dict] = ...  # 图片块视觉结果（地图/角色卡/插图），含 page_idx
+    text_count: int = 0         # 文本块数（供统计）
 ```
 
-> 语义归并（NPC/地点/怪物/理智）由 LLM 识别 + 通用规则（正则匹配：
-> `地点\d+`、`NPC`、`理智损失`）辅助。**阶段一先做到「能抽、可回溯」**，
-> 语义归类精度留待后续迭代。
+> 语义归并（NPC/地点/怪物/理智）由视觉识别（image 块）+ 文本启发辅助。
+> **阶段先做到「能抽、可回溯」**，语义归类精度留待后续迭代。
 
 ## 5. 识别流程（extractor.py）
 
 对每个 PDF：
 
-1. **分页**：`render_pages(pdf, out_dir, dpi)` → 每页渲染 PNG + 抽文字层。
-2. **识别页面类型**：`vision.recognize_page` 单次调用 → `content_type`。
-3. **按类型精抽取**：
+1. **docparser**：`MinerUClient.parse_pdf` → `ParseResult`（blocks + images/）。
+2. **text 块**：直接用 MinerU 文本（不消耗视觉）。
+3. **image 块**：取 `img_path` → `vision.recognize_page` 判类型，再按类型精抽取：
    - `map` → `recognize_map` 抽地名列表。
    - `character` → `recognize_character` 抽角色卡 JSON。
-   - `illustration / table / text` → `description`。
-4. **合并**：文字层 + 视觉结果 → `Page`；汇总为 `ModuleDocument`。
+   - `illustration / table` → `description`。
+4. **合并**：文本块拼接 + 视觉结果 → `ModuleDocument`。
 
 **稳定性设计**（应对「多模组、可重复调用」）：
 - 每模组一份独立输出 JSON（`data/models/<name>.module.json`，gitignored）。
-- 单页失败不中断整本：逐页 try/except，失败页标记 `visual` 为空 + 记录错误。
+- 单图识别失败不中断整本：逐 image 块 try/except，失败跳过该块。
 - 幂等重跑：重复解析同一 PDF 覆盖输出，无累积状态。
 - 视觉调用注入 `retry`（网络/限流重试），默认 2 次。
 

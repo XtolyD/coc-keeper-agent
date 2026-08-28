@@ -1,141 +1,123 @@
 # -*- coding: utf-8 -*-
-"""模组抽取编排：逐页「文本读取 + 视觉验证」双轨 → 合并为 ModuleDocument。
+"""模组抽取（MinerU 版）：从 ParseResult 抽取模组结构化数据。
 
-每页流程：
-1. pdf_reader 渲染图片 + 抽文字层；
-2. vision.recognize_page 识别页面类型 + 结构化数据；
-3. 合并进 Page.visual；失败页标记 visual 为空但不中断整本。
+输入：`docparser.ParseResult`（MinerU 已解析的结构，含 blocks/images）。
+对每个 image 块 → DeepSeek 视觉分析（地图地名/角色卡数值/插图描述）；
+text 块直接复用 MinerU 文本（不消耗视觉）。再归并 NPC/地点/怪物/理智威胁。
 
-模组级归并（NPC/地点/怪物/理智）由 vision 返回 + 规则辅助提炼。
+设计：可注入 vision（默认 DeepSeek 视觉）；纯逻辑可测（注入 mock vision）。
+不依赖 pymupdf（版面理解已由 MinerU 完成）。
 """
 from __future__ import annotations
 
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .pdf_reader import render_pages
-from .schema import ModuleDocument, Page
-from .vision import VisionClient
+from ..docparser import MinerUClient
+from ..docparser.result import Block, ParseResult
+from ..vision import VisionClient, VisionResult
+from .schema import ModuleDocument
 
 
 class ModuleExtractor:
-    """从模组 PDF 抽取结构化数据。可重复调用（每次独立、幂等）。"""
+    """从 ParseResult 抽取模组结构化数据。可重复调用（每次独立、幂等）。"""
 
-    def __init__(self, vision: Optional[VisionClient] = None, page_dpi: int = 120):
+    def __init__(self, vision: Optional[VisionClient] = None):
         self.vision = vision or VisionClient()
-        self.page_dpi = page_dpi
 
     def extract(self, pdf_path: str, out_dir: Optional[str] = None) -> ModuleDocument:
-        """解析一个模组 PDF。
+        """解析一个模组 PDF → ModuleDocument。
 
-        返回 ModuleDocument；可选把渲染图落在 out_dir（便于复核/审计）。
-        不落盘则用临时目录（用完即弃，避免生成物堆积）。
+        内部先走 MinerU（docparser）拿 ParseResult；再对图片块做视觉。
         """
-        pdf_path = str(pdf_path)
-        source_name = Path(pdf_path).name
-        if out_dir is None:
-            out_dir = tempfile.mkdtemp(prefix="mod_pages_")
+        parser = MinerUClient()
+        result = parser.parse_pdf(str(pdf_path), out_dir=out_dir)
+        return self.extract_from_result(result)
 
-        # 1. 分页：渲染图 + 文字层
-        pages = render_pages(pdf_path, out_dir, dpi=self.page_dpi)
+    def extract_from_result(self, result: ParseResult) -> ModuleDocument:
+        """从已解析的 ParseResult 抽取模组数据（可单测/复用）。"""
+        # text 块直接用 MinerU 文本（不消耗视觉）；image 块用 vision
+        texts = [b.text for b in result.blocks if b.type == "text" and b.text.strip()]
+        image_blocks = [b for b in result.blocks if b.type == "image"]
 
-        # 2. 逐页视觉识别（失败不中断）
-        for page in pages:
-            if not page.image_path:
-                vision = {"content_type": "error", "description": "无渲染图"}
-            else:
-                try:
-                    vision = self.vision.recognize_page(page.image_path)
-                    page.visual = vision.to_dict()
-                    page.content_type = vision.content_type
-                    # 按类型补充精抽取（地图/角色卡）
-                    if vision.content_type == "map":
-                        map_data = self.vision.recognize_map(page.image_path)
-                        page.visual["locations"] = map_data.get("locations", [])
-                    elif vision.content_type == "character":
-                        char_data = self.vision.recognize_character(page.image_path)
-                        page.visual.update(char_data)
-                    continue
-                except Exception as e:  # noqa: BLE001 —— 单页失败不中断整本
-                    vision = {"content_type": "error", "description": f"视觉识别失败: {e}"}
-            page.visual = vision
-            page.content_type = vision.get("content_type", "text")
+        npcs, locations, monsters, sanity = [], [], [], []
+        image_results: list[dict] = []
+        for b in image_blocks:
+            vr = self._recognize_image(b, result)
+            if vr is None:
+                continue
+            image_results.append({"page_idx": b.page_idx, **vr.to_dict()})
+            _merge_visual_entities(vr.data, npcs, locations, monsters, sanity)
 
-        # 3. 模组级归并
-        title = _guess_title(pages)
-        npcs, locations, monsters, sanity = _merge_entities(pages)
-        summary = _guess_summary(pages)
-
+        full_text = "\n".join(texts)
         return ModuleDocument(
-            source_pdf=pdf_path,
-            title=title,
-            pages=pages,
-            summary=summary,
-            npcs=npcs,
-            locations=locations,
-            monsters=monsters,
-            sanity_threats=sanity,
+            source_pdf=result.source_pdf,
+            title=self._guess_title(result),
+            summary=full_text[:200],
+            npcs=npcs, locations=locations,
+            monsters=monsters, sanity_threats=sanity,
             extracted_at=datetime.now().isoformat(timespec="seconds"),
+            image_results=image_results,
+            text_count=len(texts),
         )
+
+    def _recognize_image(self, b: Block, result: ParseResult) -> Optional[VisionResult]:
+        """对单个 image 块做视觉识别（地图/角色卡/插图）。"""
+        img_abs = self._resolve_img_path(b, result)
+        if not img_abs:
+            return None
+        try:
+            # 先分类，再按类型精抽取
+            vr = self.vision.recognize_page(img_abs)
+            ct = vr.content_type
+            if ct == "map":
+                extra = self.vision.recognize_map(img_abs)
+                vr.data.update(extra)
+            elif ct == "character":
+                extra = self.vision.recognize_character(img_abs)
+                vr.data.update(extra)
+            return vr
+        except Exception:  # noqa: BLE001 —— 单图识别失败不中断整本
+            return None
+
+    @staticmethod
+    def _resolve_img_path(b: Block, result: ParseResult) -> str:
+        """把 image 块的 img_path 解析为绝对路径。"""
+        if not b.img_path or not result.images_dir:
+            return ""
+        return str(Path(result.images_dir) / Path(b.img_path).name)
+
+    @staticmethod
+    def _guess_title(result: ParseResult) -> Optional[str]:
+        """从 text 块猜模组名（取首个较长的标题/文本行）。"""
+        for b in result.blocks:
+            if b.type == "text" and b.text.strip():
+                first = b.text.strip().splitlines()[0].strip()
+                if 2 <= len(first) <= 30 and not first.isdigit():
+                    return first
+        return None
+
+
+def _merge_visual_entities(data: dict, npcs, locations, monsters, sanity) -> None:
+    """把视觉结果里的实体并入模组级列表（去重保序）。"""
+    for key, bucket in (
+        ("locations", locations), ("monsters", monsters),
+        ("sanity_threats", sanity), ("npcs", npcs),
+    ):
+        items = data.get(key) or []
+        if isinstance(items, str):
+            items = [items]
+        for item in items:
+            if isinstance(item, str) and item and item not in bucket:
+                bucket.append(item)
 
 
 def extract_module(pdf_path: str, out_dir: Optional[str] = None) -> ModuleDocument:
-    """便捷入口：一次性解析单个模组 PDF。"""
+    """便捷入口：解析单个模组 PDF。"""
     return ModuleExtractor().extract(pdf_path, out_dir)
 
 
 def extract_batch(pdf_paths: list[str], out_dir: Optional[str] = None) -> list[ModuleDocument]:
-    """批量解析多个模组 PDF，各自独立输出。"""
+    """批量解析多个模组 PDF。"""
     return [ModuleExtractor().extract(p, out_dir) for p in pdf_paths]
-
-
-# ---- 归并辅助（纯函数，可单测）----------------------------------------------
-def _guess_title(pages: list[Page]) -> Optional[str]:
-    """从视觉/文字层猜模组名：优先首页文字层首个非空行。"""
-    if not pages:
-        return None
-    for p in pages[:3]:
-        for line in p.text.splitlines():
-            line = line.strip()
-            if len(line) >= 2 and not line.isdigit():
-                return line
-    return None
-
-
-def _merge_entities(pages: list[Page]) -> tuple[list, list, list, list]:
-    """从各页视觉结果聚合 NPC/地点/怪物/理智威胁（去重保序）。"""
-    npcs, locations, monsters, sanity = [], [], [], []
-    for p in pages:
-        v = p.visual or {}
-        for k, bucket in (
-            ("locations", locations),
-            ("monsters", monsters),
-            ("sanity_threats", sanity),
-            ("npcs", npcs),
-        ):
-            for item in _as_list(v.get(k)):
-                if item and item not in bucket:
-                    bucket.append(item)
-    return npcs, locations, monsters, sanity
-
-
-def _as_list(value) -> list:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        return [value]
-    return []
-
-
-def _guess_summary(pages: list[Page]) -> str:
-    """取第一个有 description 的页作为剧情简述起点。"""
-    for p in pages:
-        v = p.visual or {}
-        desc = v.get("description")
-        if desc:
-            return desc
-    return ""

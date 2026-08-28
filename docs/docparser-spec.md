@@ -69,6 +69,7 @@ MinerU 精准解析 API（`v4`，用 `.env` 的 `MINERU_API_KEY`），本地文�
 - `text_level`：标题层级（`"2"`=二级标题；空=正文）；仅 text 类型有
 - `page_idx`：页号（0 起）
 - `bbox`：块坐标 [x0,y0,x1,y1]（供排序/页内定位）
+- **`img_path`**：图片相对路径（`type=image` 时，如 `images/xxx.jpg`）——供 vision 分析
 - 按页顺序排列（`page_idx` 单调递增），已按阅读顺序
 
 ## 3. 模块边界
@@ -95,6 +96,7 @@ class Block:
     text_level: str      # 标题层级（"" 正文）
     page_idx: int        # 页号（0 起）
     bbox: list[float]    # [x0,y0,x1,y1]
+    img_path: str        # 图片相对路径（type=image 时，供 vision 分析）
 
 @dataclass
 class ParseResult:

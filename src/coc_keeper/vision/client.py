@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""DeepSeek 视觉客户端：识别模组页面（地图/角色卡/插图/表格）。
+"""DeepSeek 视觉客户端（独立层）：分析图片（地图/角色卡/插图/表格）。
 
-封装「按需 thinking + 充足 max_tokens + JSON 输出」——这些是实测得出的稳定配置，
-集中在 VisionClient 一处，避免散落到处出错。可注入真实 client 或 mock（供单测）。
+提供三类识别，供 `module/`（模组语义）与 `retrieval/`（规则书图块）复用：
+- `VisionResult`：一次识别的结果（content_type + data + description）。
+- `VisionClient`：基于 OpenAI SDK 的 DeepSeek 视觉客户端。
+
+封装「按需 thinking + 充足 max_tokens + JSON 输出」——实测得出的稳定配置，
+集中在 VisionClient 一处。可注入真实 client 或 mock（供单测）。
 
 关键实测结论（见 docs/module-spec.md §2）：
 - max_tokens 是上限非强制：设 393216（API 上限）时模型「够用即停」，不浪费。
@@ -15,7 +19,8 @@ import base64
 import json
 import re
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from pathlib import Path
+from typing import Optional
 
 from ..config import Settings
 
@@ -28,19 +33,14 @@ CONTENT_TYPES = ("text", "map", "character", "illustration", "table")
 
 @dataclass
 class VisionResult:
-    """一次页面识别的结果。"""
-    content_type: str          # 页面类型，见 CONTENT_TYPES
+    """一次图片识别的结果。"""
+    content_type: str          # 图片类型，见 CONTENT_TYPES
     data: dict                 # 结构化数据（如 map 的地名列表、character 的属性）
     description: str = ""      # 自然语言描述
 
     def to_dict(self) -> dict:
         return {"content_type": self.content_type, "data": self.data,
                 "description": self.description}
-
-
-class _LLM(Protocol):
-    """OpenAI 客户端的最小接口（便于 mock）。"""
-    def chat_completions(self): ...  # type: ignore[no-untyped-def]
 
 
 class VisionClient:
@@ -61,36 +61,35 @@ class VisionClient:
             self.client = OpenAI(api_key=s.api_key, base_url=s.base_url)
         return self.client
 
+    def _read_b64(self, image_path: str, image_mime: str) -> str:
+        return base64.b64encode(Path(image_path).read_bytes()).decode()
+
     def recognize_page(self, image_path: str, image_mime: str = "image/png") -> VisionResult:
-        """识别单个页面图片 → 页面类型 + 结构化数据。"""
-        b64 = base64.b64encode(open(image_path, "rb").read()).decode()
+        """识别单个图片 → 类型 + 结构化数据。"""
         content = [
             {"type": "text", "text": CLASSIFY_PROMPT},
             {"type": "image_url",
-             "image_url": {"url": f"data:{image_mime};base64,{b64}"}},
+             "image_url": {"url": f"data:{image_mime};base64,{self._read_b64(image_path, image_mime)}"}},
         ]
-        raw = self._chat(content)
-        return self._parse(raw)
+        return self._parse(self._chat(content))
 
-    def recognize_map(self, image_path: str) -> dict:
-        """识别地图页 → 地名列表。"""
-        b64 = base64.b64encode(open(image_path, "rb").read()).decode()
+    def recognize_map(self, image_path: str, image_mime: str = "image/png") -> dict:
+        """识别地图 → 地名列表 JSON。"""
         content = [
             {"type": "text", "text": MAP_PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            {"type": "image_url",
+             "image_url": {"url": f"data:{image_mime};base64,{self._read_b64(image_path, image_mime)}"}},
         ]
-        raw = self._chat(content)
-        return self._parse_json(raw)
+        return self._parse_json(self._chat(content))
 
-    def recognize_character(self, image_path: str) -> dict:
-        """识别角色卡页 → 属性/技能 JSON。"""
-        b64 = base64.b64encode(open(image_path, "rb").read()).decode()
+    def recognize_character(self, image_path: str, image_mime: str = "image/png") -> dict:
+        """识别角色卡 → 属性/技能 JSON。"""
         content = [
             {"type": "text", "text": CHARACTER_PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            {"type": "image_url",
+             "image_url": {"url": f"data:{image_mime};base64,{self._read_b64(image_path, image_mime)}"}},
         ]
-        raw = self._chat(content)
-        return self._parse_json(raw)
+        return self._parse_json(self._chat(content))
 
     # ---- 内部实现 ---------------------------------------------------------
     def _chat(self, content: list[dict]) -> str:
@@ -131,12 +130,12 @@ class VisionClient:
 
 
 # ---- 提示词 ------------------------------------------------------------------
-# 分类提示：判断页面属于哪种类型，并给出通用描述。
+# 分类提示：判断图片属于哪种类型，并给出通用描述。
 CLASSIFY_PROMPT = (
-    "你是CoC跑团模组解析器。判断这一页属于哪种类型，并抽取其内容。"
+    "你是CoC跑团模组解析器。判断这张图片属于哪种类型，并抽取其内容。"
     '只输出JSON：{"content_type":"text|map|character|illustration|table",'
-    '"description":"该页内容简述（中文）"}。'
-    "若这一页是地图，content_type取map并尽量在description中列出地名；"
+    '"description":"该图内容简述（中文）"}。'
+    "若这是地图，content_type取map并尽量在description中列出地名；"
     "若是调查员角色卡，content_type取character；"
     "若是插图，content_type取illustration；"
     "若含表格，content_type取table。"
@@ -144,8 +143,8 @@ CLASSIFY_PROMPT = (
 
 # 地图提示：抽地名列表。
 MAP_PROMPT = (
-    '这是CoC模组的一页地图。只输出JSON：{"content_type":"map","locations":["地名2","地名2"],'
-    '"description":"地图简述"}。尽可能完整列出图中所有可见地名/地点标签（中文，用顿号或分号分隔为数组）。'
+    '这是CoC模组的一张地图。只输出JSON：{"content_type":"map","locations":["地名1","地名2"],'
+    '"description":"地图简述"}。尽可能完整列出图中所有可见地名/地点标签（中文，用逗号分隔为数组）。'
 )
 
 # 角色卡提示：抽取属性/技能 JSON。

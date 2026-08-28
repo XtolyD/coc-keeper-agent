@@ -37,26 +37,29 @@ class Page:
 
 @dataclass
 class ModuleDocument:
-    """一个模组的整体抽取结果。"""
+    """一个模组的整体抽取结果（MinerU 版）。"""
     source_pdf: str                                   # 原 PDF 文件名（含路径）
     title: Optional[str] = None                       # 模组名
-    pages: list[Page] = field(default_factory=list)
     summary: str = ""                                 # 剧情一句话总览
     npcs: list[str] = field(default_factory=list)     # 提取到的 NPC 名
     locations: list[str] = field(default_factory=list) # 地点名
     monsters: list[str] = field(default_factory=list)  # 怪物/生物
     sanity_threats: list[str] = field(default_factory=list)  # 理智威胁点
     extracted_at: str = ""                            # ISO 时间戳
+    # 图片块视觉结果（地图/角色卡/插图），按页序
+    image_results: list[dict] = field(default_factory=list)
+    text_count: int = 0                               # 文本块数（供统计）
 
     def to_dict(self) -> dict:
         return {
             "source_pdf": self.source_pdf,
             "title": self.title,
-            "pages": [p.to_dict() for p in self.pages],
             "summary": self.summary,
             "npcs": self.npcs,
             "locations": self.locations,
             "monsters": self.monsters,
             "sanity_threats": self.sanity_threats,
             "extracted_at": self.extracted_at,
+            "image_results": self.image_results,
+            "text_count": self.text_count,
         }

@@ -17,13 +17,14 @@ class Block:
     text: str                    # 文本（image 类为空串）
     text_level: str              # 标题层级（""=正文；"2"=二级标题）
     page_idx: int                # 页号（0 起）
-    bbox: list[float]            # [x0,y0,x1,y1]
+    bbox: list[float] = field(default_factory=list)  # [x0,y0,x1,y1]
+    img_path: str = ""           # 图片相对路径（type=image 时如 images/xxx.jpg）
 
     def to_dict(self) -> dict:
         return {
             "type": self.type, "text": self.text,
             "text_level": self.text_level, "page_idx": self.page_idx,
-            "bbox": self.bbox,
+            "bbox": self.bbox, "img_path": self.img_path,
         }
 
     @property
@@ -80,6 +81,7 @@ def parse_content_list(data: list[dict]) -> list[Block]:
             text_level=str(item.get("text_level", "") or ""),
             page_idx=page_idx,
             bbox=bbox,
+            img_path=str(item.get("img_path", "") or ""),
         ))
     return blocks
 
