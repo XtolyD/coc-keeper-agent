@@ -21,6 +21,9 @@ data/rulebook/chunk_verify_report.txt
 # 版权 PDF 源文件（规则书/模组，外部翻译版，不入库）
 data/**/*.pdf
 
+# MinerU 文档解析产物（PDF → content_list/images，可重新解析，不入库）
+data/mineru/
+
 # pytest 缓存（已禁用 cacheprovider；首跑遗留的孤儿目录）
 .pytest_cache/
 pytest-cache-files-*/

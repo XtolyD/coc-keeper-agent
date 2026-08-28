@@ -49,6 +49,10 @@ class Settings:
     base_url: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     api_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
 
+    # MinerU 文档解析（PDF → content_list + images）
+    mineru_api_key: str = field(default_factory=lambda: os.environ.get("MINERU_API_KEY", ""))
+    mineru_base_url: str = field(default_factory=lambda: os.environ.get("MINERU_BASE_URL", "https://mineru.net"))
+
     # 运行参数
     max_steps: int = 8          # 单次 respond 的工具调用循环上限
     max_tokens: int = 2048
