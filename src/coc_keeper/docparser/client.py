@@ -74,12 +74,14 @@ class MinerUClient:
         enable_formula: bool = False,
         enable_table: bool = True,
         language: str = "ch",
+        page_ranges: Optional[str] = None,
         out_dir: Optional[str] = None,
     ) -> ParseResult:
         """解析一个 PDF，返回 ParseResult。
 
-        本地 PDF 走 file-urls/batch 上传流程；轮询到 done/failed 拿结果。
-        失败抛 DocParserError（调用方可重试）。
+        Args:
+            pdf_path: 本地 PDF 路径。
+            page_ranges: 页码范围（如 "2,4-6"），None 则整本。
         """
         pdf_path = str(pdf_path)
         if not Path(pdf_path).exists():
@@ -87,7 +89,8 @@ class MinerUClient:
 
         # 1. 申请上传链接
         batch_id, file_urls = self._request_upload_urls(pdf_path, model_version,
-                                                        enable_formula, enable_table, language)
+                                                        enable_formula, enable_table, language,
+                                                        page_ranges)
         # 2. 上传
         self._upload_file(file_urls[0], pdf_path)
         # 3. 轮询
@@ -102,14 +105,18 @@ class MinerUClient:
     def _request_upload_urls(
         self, pdf_path: str, model_version: str,
         enable_formula: bool, enable_table: bool, language: str,
+        page_ranges: Optional[str] = None,
     ) -> tuple[str, list[str]]:
         """POST /file-urls/batch → (batch_id, [file_url])。"""
+        files = {"name": Path(pdf_path).name}
+        if page_ranges:
+            files["page_ranges"] = page_ranges
         body = {
             "model_version": model_version,
             "enable_formula": enable_formula,
             "enable_table": enable_table,
             "language": language,
-            "files": [{"name": Path(pdf_path).name}],
+            "files": [files],
         }
         resp = self._post("/api/v4/file-urls/batch", body)
         data = resp.get("data") or {}
