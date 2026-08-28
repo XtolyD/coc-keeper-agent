@@ -34,12 +34,22 @@ coc-keeper-agent/
 │   ├── design.md             # 架构设计
 │   └── learning-plan.md      # 学习路线与里程碑
 ├── scripts/
-│   ├── extract_rules.py      # 从规则书 PDF 抽取文本（供 RAG）
+│   ├── extract_rules.py      # 规则书：梳理 + 清洗 + 实体分块 + 二次存储
+│   ├── verify_rulebook.py    # 清洗层完整性校验（无正文丢失）
+│   ├── verify_chunks.py      # 实体分块逐页验证报告
 │   └── smoke_llm.py          # LLM 连通性 / 工具调用冒烟测试
 ├── data/
-│   └── rulebook/             # 抽取出的规则全文（gitignored，可再生成）
+│   └── rulebook/             # 规则原文 + 生成的结构/分页/实体块语料（gitignored，可再生成）
+│       ├── rules_structure.json   # 按 TOC 分层（章/节/小节）+ 页区间 + 清洗后正文
+│       ├── rules_pages/           # 每页一份的清洗后文本
+│       ├── rules_chunks.json      # 按「内容实体」切分的规则块（怪物/技能/法术/规则）
+│       └── chunk_verify_report.txt # 全书逐页分块验证报告
 ├── src/coc_keeper/
 │   ├── __init__.py
+│   ├── rulebook.py           # 规则书结构化抽取（双栏重排 + 噪声清洗 + TOC 分层）
+│   ├── chunker.py            # 实体识别判据（怪物/邪神/技能名等）
+│   ├── build_chunks.py       # 实体分块编排器（页内切分 + 跨页合并 + 表格区识别）
+│   ├── merge_fragments.py    # 残块回合并（消除双栏断句孤立碎片）
 │   ├── config.py             # 配置：从 .env 读取模型与运行参数
 │   ├── cli.py                # 交互式跑团入口（python -m coc_keeper.cli）
 │   ├── dice.py               # 骰子机制：d100、奖励/惩罚骰、成功度、难度
@@ -53,7 +63,7 @@ coc-keeper-agent/
 │       ├── agent.py          #   工具调用循环
 │       ├── prompts.py        #   系统提示词
 │       └── state.py          #   会话状态
-└── tests/                    # 30 个单元测试，规则引擎已全绿
+└── tests/                    # 44 个单元测试（规则引擎 + 规则书抽取/分块逻辑）
 ```
 
 ---
@@ -74,9 +84,11 @@ pip install -r requirements.txt
 conda activate coc-keeper
 cd coc-keeper-agent
 
-# 1. （可选）从规则书 PDF 重新抽取文本
-python scripts\extract_rules.py --toc          # 打印目录
-python scripts\extract_rules.py --dump-all     # 抽取全文到 data/rulebook/
+# 1. （一次性·离线）规则书 → 梳理 + 清洗 + 实体分块，并校验完整性
+python scripts\extract_rules.py --build      # 生成 rules_structure.json + rules_pages/ + rules_chunks.json
+python scripts\verify_rulebook.py             # 校验清洗层无正文丢失（仅删噪声）
+python scripts\verify_chunks.py               # 生成全书逐页分块验证报告
+#   打印某页清洗后文本：python scripts\extract_rules.py --pages 24
 
 # 2. 运行规则引擎测试
 python -m pytest -q
@@ -95,7 +107,7 @@ python -m coc_keeper.cli
 | --- | --- | --- | --- |
 | M0 | 规则引擎核心 | 骰子、角色卡、技能/对抗/幸运/理智检定 | ✅ 已完成 |
 | M1 | 规则引擎扩展 | 战斗、伤害、疯狂发作状态机、追逐 | ⏳ 待开始 |
-| M2 | 规则检索 RAG | BM25 → 向量检索，让 Agent 能查规则 | ⏳ 待开始 |
+| M2 | 规则检索 RAG | 规则书清洗/分块（实体/技能/法术）+ BM25 索引 + `search_rules` | 🚧 语料就绪，BM25 检索待做 |
 | M3 | KP Agent 核心 | 工具调用循环（DeepSeek）、记忆、单人跑团 | 🚧 代码完成，待接入 DeepSeek 冒烟测试 |
 | M4 | 多人跑团 | 多人会话、完整战役状态持久化 | ⏳ 待开始 |
 | M5 | 工程化 | 评估、可观测性、成本与安全、CLI/界面 | ⏳ 待开始 |

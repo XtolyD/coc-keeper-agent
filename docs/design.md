@@ -62,7 +62,9 @@
 
 第一阶段用 **BM25**（纯 Python，`rank_bm25`），不引入 embedding 服务：
 - 好处：零外部依赖、零模型下载、可解释（能看到命中哪段规则），便于学习检索本质。
-- 数据源：`data/rulebook/fulltext.txt`（380 页全文，按页切块，页号即出处）。
+- 数据源：`data/rulebook/rules_pages/*.txt`（每页一份的**清洗后**文本，页号即出处）与
+  `rules_structure.json`（按 TOC 分层 + 页区间）。由 `scripts/extract_rules.py --build`
+  一次性离线生成，`scripts/verify_rulebook.py` 校验无正文丢失（仅删去章节标题/页码/译者/引文署名等噪声）。
 
 第二阶段（可选）升级为**向量检索**（分块 + 中文 embedding + 向量库），对比
 BM25 与语义检索在规则查询上的差异。规则查询的难点在于：CoC 规则高度结构化
