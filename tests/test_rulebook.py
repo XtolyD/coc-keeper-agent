@@ -84,6 +84,40 @@ def test_is_noise_keeps_body_sentence_starting_with_em_dash():
     assert not _is_noise(_block(36, 60, 280, 70, "——特别是克苏鲁和死灵之书"), r)
 
 
+# ---- 残块回合并：属性名不作为残块 ------------------------------------------
+def test_merge_attr_name_not_merged():
+    # 属性名（如 体质）是独立新标题，不应被并进前一特征值行尾。
+    from coc_keeper.merge_fragments import merge_tail_fragments
+    r = _rect()
+    # 前一宽行 + 属性名 体质（gap≤6）
+    blocks = [
+        _block(324, 135.8, 560, 146, "200+：怪物之力"),
+        _block(439.1, 165.9, 460, 178, "体质"),
+    ]
+    out = merge_tail_fragments(blocks, r)
+    assert len(out) == 2            # 不应被合并
+    assert out[0].text == "200+：怪物之力"
+    assert out[1].text.strip() == "体质"
+
+
+def test_merge_real_fragment_still_merged():
+    # 真正的行尾残碎（如 移动８ 的断行）仍应合并。
+    from coc_keeper.merge_fragments import merge_tail_fragments
+    r = _rect()
+    blocks = [
+        _block(45.6, 490, 279, 504, "若敏捷或力量之一大于等于体型或三者相等：移"),
+        _block(57.8, 507.6, 82, 518, "动８"),
+    ]
+    out = merge_tail_fragments(blocks, r)
+    assert len(out) == 1
+    assert out[0].text == "若敏捷或力量之一大于等于体型或三者相等：移动８"
+
+
+def test_merge_attr_name_set_contains_all_8():
+    from coc_keeper.merge_fragments import ATTR_NAMES
+    assert ATTR_NAMES == {"力量", "体质", "体型", "敏捷", "外貌", "智力", "意志", "教育"}
+
+
 # ---- TOC 分层 ---------------------------------------------------------------
 class _FakeDoc:
     def __init__(self, toc):

@@ -89,6 +89,10 @@ def is_monster_name(text: str, width: float = 0.0, page_width: float = 612.0) ->
         return False
     if any(p in c for p in "。，；：！？《》"):
         return False
+    # 以句末标点结尾 → 正文被截断的残句（如 `的舞者)｡`、`别的书｡`、`过来查看……`），
+    # 不是实体名（真实体名都以汉字/字母结尾）。精准排除断句残块，不误伤真名。
+    if c[-1] in "。｡．，、；：！？）】〕」》…%":
+        return False
     if c in _KNOWN_SUBHEAD:
         return False
     if is_stat_line(text):

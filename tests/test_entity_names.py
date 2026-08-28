@@ -83,3 +83,15 @@ def test_split_table_region():
     # 无表头则整页为正文
     pre2, tab2, post2 = _split_table_region(["普通正文一行内容较长", "另一行没有表格特征"])
     assert tab2 == []
+
+
+def test_monster_name_rejects_sentence_fragment_punctuation():
+    # 以句末标点结尾的断句残块不是实体名（原有漏洞：｡/）未排除）。
+    for frag in ("的舞者)｡", "别的书｡", "物｡", "｡", "过来查看……", "你在恐惧中醒了过来……"):
+        assert not is_monster_name(frag)
+
+
+def test_monster_name_keeps_real_names_ending_in_letter():
+    # 真怪物名（含中英混合、汉字结尾）不受影响。
+    for name in ("拜亚基", "食尸鬼", "深潜者", "修格斯", "图尔兹查Tulzscha", "旧日支配者"):
+        assert is_monster_name(name)

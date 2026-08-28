@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pages", nargs="+", type=int, help="仅打印指定页")
     ap.add_argument("--out", type=str, help="写入文件的路径（否则打印到 stdout）")
+    ap.add_argument("--write", type=str, help="把分块结果写入 JSON（如 data/rulebook/rules_chunks.json）")
     args = ap.parse_args()
 
     if not PDF.exists():
@@ -43,6 +45,10 @@ def main():
     secs = build_structure(doc)
     pagemap = build_page_path_map(secs)
     chunks = chunk_pages(pages, pagemap)
+
+    if args.write:
+        Path(args.write).write_text(json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[OK] 分块结果已写入 {args.write}（{len(chunks)} 块）")
 
     lines: list[str] = []
     lines.append(f"规则书实体分块报告 —— {len(doc)} 页，产出 {len(chunks)} 个块\n")
