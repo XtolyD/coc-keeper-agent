@@ -20,7 +20,7 @@ from .observability import TraceRecorder
 from .prompts import KP_SYSTEM_PROMPT, build_system_prompt, infer_action_skill
 from .security import PromptGuard
 from .state import Session
-from .tools import TOOLS_SCHEMA, make_dispatcher
+from .tool_registry import ToolRegistry
 
 
 class KeeperAgent:
@@ -44,7 +44,8 @@ class KeeperAgent:
             build_system_prompt(base, session.investigator),
             limit=self.settings.history_limit,
         )
-        self.dispatch = make_dispatcher(session, tracer=self.tracer, rng=rng)
+        self.tools = ToolRegistry(session, tracer=self.tracer, rng=rng)
+        self.dispatch = self.tools.dispatch
 
     def _record_llm(self, resp) -> None:
         self.tracer.record_llm(self.settings.model, resp.usage, resp.latency_ms)
@@ -111,7 +112,7 @@ class KeeperAgent:
             visible_checks.append(("roll_skill_check", required_check))
         for _ in range(self.settings.max_steps):
             self._refresh_system_prompt(required_check)
-            resp = self.llm.chat(self.memory.messages(), tools=TOOLS_SCHEMA)
+            resp = self.llm.chat(self.memory.messages(), tools=self.tools.schema)
             self._record_llm(resp)
             self._apply_spoiler_gate(resp)
             if resp.tool_calls:

@@ -2,7 +2,7 @@
 from coc_keeper.agent.state import Session
 from coc_keeper.agent.tools import make_dispatcher
 from coc_keeper.retrieval import Index
-from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleSection
+from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleScene
 
 
 def test_dispatcher_search_and_skill_update(scripted):
@@ -28,8 +28,8 @@ def test_dispatcher_rejects_bad_arguments():
 def test_dispatcher_module_is_current_scene_only():
     session = Session()
     session.module = ModuleRuntime(KeeperModule("模组", "module.pdf", [
-        ModuleSection("scene-001", "当前", "场景 1", 1, 1, "当前线索是钥匙。"),
-        ModuleSection("scene-002", "未来", "场景 2", 2, 2, "未来秘密是医生。"),
+        ModuleScene("scene-001", "当前", "场景 1", 1, 1, "当前线索是钥匙。"),
+        ModuleScene("scene-002", "未来", "场景 2", 2, 2, "未来秘密是医生。"),
     ]))
     dispatch = make_dispatcher(session)
     result = dispatch("search_module", {"query": "医生"})
