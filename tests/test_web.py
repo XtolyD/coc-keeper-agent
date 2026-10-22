@@ -1,23 +1,39 @@
 # -*- coding: utf-8 -*-
-import pymupdf
 import time
-from fastapi.testclient import TestClient
 from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
+
 import coc_keeper.web as web
+from coc_keeper.modules import KeeperModule, ModuleScene
 
 
-def make_pdf() -> bytes:
-    doc = pymupdf.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "A short scenario begins in an old house with a locked door.")
-    payload = doc.tobytes()
-    doc.close()
+def make_module(title="测试模组") -> KeeperModule:
+    return KeeperModule(title, "test.pdf", [
+        ModuleScene(
+            "scene-001", "门厅", "旧宅门前", 1, 1,
+            "门厅里有一把生锈钥匙。", objectives=["找到钥匙"],
+        ),
+    ])
+
+
+def make_context(tmp_path) -> web.AppContext:
+    context = web.AppContext(tmp_path / "data")
+    web.create_app(context)
+    return context
+
+
+def wait_job(client, job_id):
+    for _ in range(200):
+        payload = client.get(f"/api/imports/{job_id}").json()
+        if payload["status"] != "running":
+            return payload
+        time.sleep(0.01)
     return payload
 
 
-def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
-    monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
+def test_web_character_module_and_game_flow(tmp_path):
+    context = make_context(tmp_path)
     client = TestClient(web.app)
     index_response = client.get("/")
     assert index_response.status_code == 200
@@ -46,16 +62,10 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     assert character["sheet"]["occupation"]["name"] == accountant["name"]
     assert character["occupation_point_budget"] == candidate["sheet"]["attributes"]["EDU"] * 4
 
-    module_response = client.post(
-        "/api/modules/upload",
-        files={"file": ("test.pdf", make_pdf(), "application/pdf")},
-        data={"title": "测试模组"},
-    )
-    assert module_response.status_code == 200
-    module = module_response.json()
-    assert "sections" not in module
-
-    detail_response = client.get(f"/api/modules/{module['id']}")
+    source = tmp_path / "test.pdf"
+    source.write_bytes(b"%PDF-1.4\n% fake module\n")
+    record = context.modules.create(make_module(), source_pdf=source)
+    detail_response = client.get(f"/api/modules/{record.id}")
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["source_pdf_available"] is True
@@ -66,132 +76,112 @@ def test_web_character_module_and_game_flow(tmp_path, monkeypatch):
     assert detail["module"]["story"]["nodes"]
     detail["module"]["title"] = "修订后的测试模组"
     detail["module"]["scenes"][0]["public_title"] = "旧宅门前"
-    update_response = client.put(f"/api/modules/{module['id']}", json=detail["module"])
+    update_response = client.put(f"/api/modules/{record.id}", json=detail["module"])
     assert update_response.status_code == 200
     assert update_response.json()["module"]["title"] == "修订后的测试模组"
 
     game_response = client.post("/api/games", json={
-        "title": "测试战役", "character_id": character["id"], "module_id": module["id"],
+        "title": "测试战役", "character_id": character["id"], "module_id": record.id,
     })
     assert game_response.status_code == 200
     game = game_response.json()
     assert game["character_id"] == character["id"]
-    assert game["module_id"] == module["id"]
+    assert game["module_id"] == record.id
     assert game["character"]["name"] == "周晴"
     assert game["module"]["module"] == "修订后的测试模组"
     assert "scene" not in game["module"]
     assert "progress" not in game["module"]
 
     assert client.delete(f"/api/characters/{character['id']}").status_code == 409
-    assert client.delete(f"/api/modules/{module['id']}").status_code == 409
+    assert client.delete(f"/api/modules/{record.id}").status_code == 409
 
     delete_response = client.delete(f"/api/games/{game['id']}")
     assert delete_response.status_code == 200
     assert delete_response.json()["deleted"] is True
     assert client.get(f"/api/games/{game['id']}").status_code == 404
     assert client.delete(f"/api/characters/{character['id']}").json()["deleted"] is True
-    assert client.delete(f"/api/modules/{module['id']}").json()["deleted"] is True
+    assert client.delete(f"/api/modules/{record.id}").json()["deleted"] is True
     assert client.get("/api/characters").json() == []
     assert client.get("/api/modules").json() == []
 
 
-def test_web_status_declares_context_window(tmp_path, monkeypatch):
-    monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
+def test_web_status_declares_mineru_and_deepseek(tmp_path, monkeypatch):
+    make_context(tmp_path)
+    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(
+        is_configured=True, model="deepseek-v4-flash-vision-exp",
+        context_window=1_000_000, base_url="https://api.deepseek.com",
+        mineru_api_key="mineru-key", mineru_base_url="https://mineru.net",
+    ))
     client = TestClient(web.app)
     payload = client.get("/api/status").json()
     assert payload["context_window"] == 1_000_000
+    assert payload["mineru"]["configured"] is True
+    assert payload["review"] == {
+        "configured": True, "provider": "DeepSeek", "model": "deepseek-v4-flash-vision-exp",
+    }
+    assert "vision" not in payload
 
 
-def test_web_can_run_deep_module_analysis(tmp_path, monkeypatch):
-    monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
+def test_web_upload_runs_background_import_job(tmp_path, monkeypatch):
+    context = make_context(tmp_path)
     client = TestClient(web.app)
-    module = client.post(
+
+    class StubService:
+        def import_pdf(self, source_path, *, title=None, source_name=None, remove_source=False):
+            def run(report):
+                report("MinerU 解析 PDF")
+                record = context.modules.create(make_module(title or "上传模组"))
+                return {"module_id": record.id, "module": record.summary()}
+            return context.jobs.submit("module-import", run)
+
+    context.module_service = StubService()
+    response = client.post(
         "/api/modules/upload",
-        files={"file": ("test.pdf", make_pdf(), "application/pdf")},
-        data={"title": "待分析模组"},
-    ).json()
-
-    class StubAnalyzer:
-        def __init__(self, _client, **_kwargs):
-            pass
-
-        def analyze(self, value):
-            value.analysis = {"mode": "llm", "status": "complete"}
-            return value
-
-    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(is_configured=True))
-    monkeypatch.setattr(web, "LLMClient", lambda _settings: object())
-    monkeypatch.setattr(web, "LLMModuleAnalyzer", StubAnalyzer)
-    response = client.post(f"/api/modules/{module['id']}/analyze")
+        files={"file": ("test.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        data={"title": "上传模组"},
+    )
     assert response.status_code == 202
-    for _ in range(100):
-        status = client.get(f"/api/modules/{module['id']}/analysis").json()
-        if status["status"] != "running":
+    job = wait_job(client, response.json()["job_id"])
+    assert job["status"] == "completed"
+    assert client.get(f"/api/modules/{job['result']['module_id']}").status_code == 200
+
+
+def test_web_reanalyze_uses_background_job(tmp_path, monkeypatch):
+    context = make_context(tmp_path)
+    client = TestClient(web.app)
+    source = tmp_path / "test.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    record = context.modules.create(make_module(), source_pdf=source)
+
+    class StubService:
+        def reanalyze(self, module_id, *, reparse=False, review=True):
+            def run(report):
+                report("DeepSeek 复核")
+                stored = context.modules.get(module_id)
+                stored.module.analysis = {"mode": "llm", "status": "complete"}
+                context.modules.save(module_id, stored.module)
+                return {"module_id": module_id}
+            return context.jobs.submit("module-reanalyze", run)
+
+    context.module_service = StubService()
+    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(mineru_api_key="mineru-key"))
+    response = client.post(f"/api/modules/{record.id}/analyze?reparse=true")
+    assert response.status_code == 202
+    for _ in range(200):
+        payload = client.get(f"/api/modules/{record.id}/analysis").json()
+        if payload["status"] != "running":
             break
         time.sleep(0.01)
-    assert status["status"] == "completed"
-    detail = client.get(f"/api/modules/{module['id']}").json()
+    assert payload["status"] == "completed"
+    detail = client.get(f"/api/modules/{record.id}").json()
     assert detail["module"]["analysis"]["status"] == "complete"
 
 
-def test_web_can_run_grok_visual_cross_analysis(tmp_path, monkeypatch):
-    monkeypatch.setattr(web, "service", web.WebService(tmp_path / "data"))
-    client = TestClient(web.app)
-    module = client.post(
-        "/api/modules/upload",
-        files={"file": ("vision.pdf", make_pdf(), "application/pdf")},
-        data={"title": "视觉模组"},
-    ).json()
-
-    class VisionResult:
-        pages = ["Corrected visual page with actor statistics and clues."]
-
-        @staticmethod
-        def metadata():
-            return {"provider": "Grok", "model": "grok-4.5", "status": "complete"}
-
-    class StubVision:
-        def __init__(self, _client, **_kwargs):
-            pass
-
-        def extract(self, _path):
-            return VisionResult()
-
-    class StubAnalyzer:
-        def __init__(self, _client, **_kwargs):
-            pass
-
-        def analyze(self, value):
-            value.analysis = {**value.analysis, "mode": "llm", "status": "complete"}
-            return value
-
-    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(is_configured=True))
-    monkeypatch.setattr(web, "GrokVisionSettings", lambda: SimpleNamespace(
-        is_configured=True, model="grok-4.5",
-    ))
-    monkeypatch.setattr(web, "LLMClient", lambda _settings: object())
-    monkeypatch.setattr(web, "GrokPDFVisionExtractor", StubVision)
-    monkeypatch.setattr(web, "LLMModuleAnalyzer", StubAnalyzer)
-    response = client.post(f"/api/modules/{module['id']}/analyze?use_vision=true")
-    assert response.status_code == 202
-    for _ in range(100):
-        status = client.get(f"/api/modules/{module['id']}/analysis").json()
-        if status["status"] != "running":
-            break
-        time.sleep(0.01)
-    assert status["status"] == "completed"
-    detail = client.get(f"/api/modules/{module['id']}").json()
-    chunk = detail["module"]["source_chunks"][0]
-    assert chunk["extraction_method"] == "hybrid-vision"
-    assert "Corrected visual page" in chunk["text"]
-    assert chunk["raw_text"]
-
-
-def test_web_attribute_labels_are_bilingual():
+def test_web_attribute_labels_and_asset_version():
     client = TestClient(web.app)
     page = client.get("/").text
-    assert "/assets/app.js?v=2.1.0" in page
-    assert "/assets/styles.css?v=2.1.0" in page
+    assert "/assets/app.js?v=2.2.0" in page
+    assert "/assets/styles.css?v=2.2.0" in page
     assert 'id="sidebar-toggle"' in page
     script = client.get("/assets/app.js")
     assert script.status_code == 200
@@ -209,6 +199,5 @@ def test_web_attribute_labels_are_bilingual():
     assert "角色与怪物" in script.text
     assert "地点与场景" in script.text
     assert "故事线" in script.text
-    assert "文本重新分析" in script.text
-    assert "Grok 视觉交叉分析" in script.text
+    assert "重新解析并复核" in script.text
     assert 'method: "DELETE"' in script.text

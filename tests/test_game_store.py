@@ -2,14 +2,14 @@
 from coc_keeper.agent.state import Session
 from coc_keeper.character import CharacterSheet
 from coc_keeper.game_store import GameStore, TranscriptEntry
-from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleSection
+from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleScene
 
 
 def test_game_references_character_and_module_independently(tmp_path):
     session = Session(
         investigator=CharacterSheet(name="林恩"),
         module=ModuleRuntime(KeeperModule("旧宅", "old.pdf", [
-            ModuleSection("scene-001", "门厅", "场景 1", 1, 1, "门厅里有一面镜子。"),
+            ModuleScene("scene-001", "门厅", "场景 1", 1, 1, "门厅里有一面镜子。"),
         ])),
         character_id="a" * 32,
         module_id="b" * 32,

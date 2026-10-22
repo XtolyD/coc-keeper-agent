@@ -19,12 +19,13 @@ class Block:
     page_idx: int                # 页号（0 起）
     bbox: list[float] = field(default_factory=list)  # [x0,y0,x1,y1]
     img_path: str = ""           # 图片相对路径（type=image 时如 images/xxx.jpg）
+    table_body: str = ""         # 表格内容（type=table 时，MinerU 的 table_body/HTML）
 
     def to_dict(self) -> dict:
         return {
             "type": self.type, "text": self.text,
             "text_level": self.text_level, "page_idx": self.page_idx,
-            "bbox": self.bbox, "img_path": self.img_path,
+            "bbox": self.bbox, "img_path": self.img_path, "table_body": self.table_body,
         }
 
     @property
@@ -82,6 +83,7 @@ def parse_content_list(data: list[dict]) -> list[Block]:
             page_idx=page_idx,
             bbox=bbox,
             img_path=str(item.get("img_path", "") or ""),
+            table_body=str(item.get("table_body", "") or item.get("table_caption", "") or ""),
         ))
     return blocks
 

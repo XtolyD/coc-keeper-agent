@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from openai import OpenAI
 
-from ..config import GrokVisionSettings, Settings
+from ..config import Settings
 
 
 @dataclass
@@ -24,7 +24,7 @@ class LLMResponse:
 class LLMClient:
     """基于 OpenAI SDK 的兼容客户端。换供应商只需改 .env。"""
 
-    def __init__(self, settings: Settings | GrokVisionSettings):
+    def __init__(self, settings: Settings):
         self.settings = settings
         if not settings.is_configured:
             raise RuntimeError(

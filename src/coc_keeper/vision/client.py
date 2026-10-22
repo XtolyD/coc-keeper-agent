@@ -91,6 +91,17 @@ class VisionClient:
         ]
         return self._parse_json(self._chat(content))
 
+    def review_chunks(self, prompt: str, image_paths: list[str]) -> dict:
+        """DeepSeek 复核：正文 + 可选图片，返回结构化 JSON。"""
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        for path in image_paths:
+            mime = "image/jpeg" if str(path).lower().endswith((".jpg", ".jpeg")) else "image/png"
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{self._read_b64(path, mime)}"},
+            })
+        return self._parse_json(self._chat(content))
+
     # ---- 内部实现 ---------------------------------------------------------
     def _chat(self, content: list[dict]) -> str:
         client = self._get_client()

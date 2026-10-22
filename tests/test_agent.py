@@ -4,7 +4,7 @@ from coc_keeper.agent.llm import LLMResponse
 from coc_keeper.agent.prompts import infer_action_skill
 from coc_keeper.agent.state import Session
 from coc_keeper.config import Settings
-from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleSection
+from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleScene
 
 
 class StubLLM:
@@ -49,8 +49,8 @@ def test_agent_blocks_prompt_injection_before_llm():
 def test_agent_injects_only_current_module_scene_and_blocks_spoiler():
     session = Session()
     session.module = ModuleRuntime(KeeperModule("秘密宅邸", "module.pdf", [
-        ModuleSection("scene-001", "门厅", "场景 1", 1, 1, "门厅有一封未拆的信。"),
-        ModuleSection("scene-002", "真相", "场景 2", 2, 2, "镇长是幕后凶手并准备逃走。", secrets=["镇长是幕后凶手"]),
+        ModuleScene("scene-001", "门厅", "场景 1", 1, 1, "门厅有一封未拆的信。"),
+        ModuleScene("scene-002", "真相", "场景 2", 2, 2, "镇长是幕后凶手并准备逃走。", secrets=["镇长是幕后凶手"]),
     ]))
     settings = Settings(api_key="test", base_url="https://example.invalid", model="stub")
     agent = KeeperAgent(session, settings)

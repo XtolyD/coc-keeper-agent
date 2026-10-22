@@ -25,7 +25,19 @@ from .agent.state import Session
 from .character import create_character
 from .config import Settings
 from .evaluation import default_rule_suite
-from .modules import load_module
+from .module_service import ModuleApplicationService
+from .module_store import ModuleStore
+from .modules import KeeperModule, ModuleRuntime
+from .web_jobs import JobManager
+
+
+def _load_module(path: str | Path, title: str | None = None) -> ModuleRuntime:
+    source = Path(path)
+    if source.suffix.lower() == ".pdf":
+        service = ModuleApplicationService(ModuleStore(Path("data") / "modules"), JobManager())
+        module = service.load_pdf(source, title=title, progress=lambda stage: print(f"[模组] {stage}"))
+        return ModuleRuntime(module)
+    return ModuleRuntime(KeeperModule.load(source))
 
 
 def _print_sheet(sheet) -> None:
@@ -66,7 +78,7 @@ def _handle_command(command: str, session: Session, agent: KeeperAgent, autosave
         action, _, value = argument.strip().partition(" ")
         value = value.strip().strip('"').strip("'")
         if action == "add" and value:
-            session.module = load_module(value)
+            session.module = _load_module(value)
             manifest = Path("data") / "modules" / f"{Path(value).stem}.json"
             session.module.module.save(manifest)
             print(f"已加载模组《{session.module.module.title}》。")
@@ -113,7 +125,7 @@ def main() -> None:
         investigator=create_character(rng=rng)
     )
     if args.module:
-        session.module = load_module(args.module)
+        session.module = _load_module(args.module)
     _print_sheet(session.investigator)
 
     agent = KeeperAgent(session, settings, rng=rng)

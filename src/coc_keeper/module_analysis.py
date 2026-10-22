@@ -264,7 +264,7 @@ class LLMModuleAnalyzer:
         response = self.client.chat(
             [
                 {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT + "\n\n本阶段要求：" + focus},
-                {"role": "user", "content": f"模组：{module.title}\n来源：{module.source_name}\n\nPDF 原文：\n{source}"},
+                {"role": "user", "content": f"模组：{module.title}\n来源：{module.source_name}\n\nMinerU 原文：\n{source}"},
             ],
             temperature=0.1, max_tokens=12_000, timeout=300.0,
             response_format={"type": "json_object"},

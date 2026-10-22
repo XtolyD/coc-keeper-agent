@@ -17,7 +17,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent.agent import KeeperAgent
-from .agent.llm import LLMClient
 from .agent.prompts import KP_SYSTEM_PROMPT
 from .agent.state import Session
 from .character import (
@@ -25,12 +24,12 @@ from .character import (
     base_skill_values, generate_character_candidates,
 )
 from .character_store import CharacterStore
-from .config import GrokVisionSettings, PROJECT_ROOT, Settings
+from .config import PROJECT_ROOT, Settings
 from .game_store import GameRecord, GameStore, TranscriptEntry
-from .module_analysis import LLMModuleAnalyzer
+from .module_service import ModuleApplicationService
 from .module_store import ModuleStore
-from .modules import KeeperModule, ModuleRuntime, PDFModuleImporter
-from .pdf_vision import GrokPDFVisionExtractor
+from .modules import KeeperModule, ModuleRuntime
+from .web_jobs import JobManager
 from .occupations import (
     get_occupation, interest_point_budget, list_occupations,
 )
@@ -83,7 +82,7 @@ class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
-class WebService:
+class AppContext:
     def __init__(self, data_root: str | Path | None = None):
         self.data_root = Path(data_root or os.environ.get("COC_KEEPER_DATA_DIR", PROJECT_ROOT / "data"))
         self.characters = CharacterStore(self.data_root / "characters")
@@ -91,7 +90,11 @@ class WebService:
         self.games = GameStore(self.data_root / "campaigns")
         self.drafts: dict[str, list[CharacterSheet]] = {}
         self._locks: dict[str, threading.Lock] = {}
-        self.analysis_jobs: dict[str, dict[str, Any]] = {}
+        self.jobs = JobManager()
+        self.module_jobs: dict[str, str] = {}
+        self.module_service = ModuleApplicationService(
+            self.modules, self.jobs, data_root=self.data_root,
+        )
 
     def lock(self, game_id: str) -> threading.Lock:
         self._locks.setdefault(game_id, threading.Lock())
@@ -104,6 +107,8 @@ class WebService:
     def module_payload(self, record) -> dict[str, Any]:
         summary = record.summary()
         payload = {key: summary[key] for key in ("id", "title", "source_name", "pages", "created_at")}
+        payload["analysis_status"] = summary["analysis_status"]
+        payload["warnings"] = len(record.module.analysis.get("review", {}).get("warnings", []))
         payload["source_pdf_available"] = self.modules.source_pdf_path(record.id) is not None
         return payload
 
@@ -136,10 +141,21 @@ class WebService:
         return payload
 
 
-service = WebService()
 app = FastAPI(title="CoC Keeper", version="2.1.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
+
+
+def get_context() -> AppContext:
+    """按需创建默认上下文；测试可通过 create_app(context) 注入临时目录。"""
+    if not hasattr(app.state, "context"):
+        app.state.context = AppContext()
+    return app.state.context
+
+
+def create_app(context: AppContext | None = None) -> FastAPI:
+    app.state.context = context or AppContext()
+    return app
 
 
 @app.exception_handler(FileNotFoundError)
@@ -162,19 +178,26 @@ def index():
 @app.get("/api/status")
 def status():
     settings = Settings()
-    vision = GrokVisionSettings()
     return {
         "configured": settings.is_configured,
         "model": settings.model,
         "context_window": settings.context_window,
         "provider": "DeepSeek" if "deepseek" in settings.base_url.lower() else settings.base_url,
-        "vision": {"configured": vision.is_configured, "provider": "Grok", "model": vision.model},
+        "mineru": {
+            "configured": bool(settings.mineru_api_key),
+            "base_url": settings.mineru_base_url,
+        },
+        "review": {
+            "configured": settings.is_configured,
+            "provider": "DeepSeek",
+            "model": settings.model,
+        },
     }
 
 
 @app.get("/api/characters")
 def list_characters():
-    return [service.character_payload(record) for record in service.characters.list()]
+    return [get_context().character_payload(record) for record in get_context().characters.list()]
 
 
 @app.get("/api/occupations")
@@ -186,7 +209,7 @@ def occupations():
 def create_character_draft(request: DraftRequest):
     draft_id = uuid.uuid4().hex
     candidates = generate_character_candidates(request.name.strip(), request.age, count=5, rng=random.Random())
-    service.drafts[draft_id] = candidates
+    get_context().drafts[draft_id] = candidates
     return {
         "draft_id": draft_id,
         "candidates": [
@@ -202,7 +225,7 @@ def create_character_draft(request: DraftRequest):
 
 @app.post("/api/characters")
 def save_character(request: CharacterCreateRequest):
-    candidates = service.drafts.get(request.draft_id)
+    candidates = get_context().drafts.get(request.draft_id)
     if candidates is None:
         raise HTTPException(status_code=404, detail="建卡候选已过期，请重新生成")
     sheet = CharacterSheet.from_dict(candidates[request.candidate_index].to_dict())
@@ -210,14 +233,14 @@ def save_character(request: CharacterCreateRequest):
         sheet, request.occupation_id, request.occupation_skills,
         request.occupation_points, request.interest_points,
     )
-    record = service.characters.create(sheet)
-    service.drafts.pop(request.draft_id, None)
-    return service.character_payload(record)
+    record = get_context().characters.create(sheet)
+    get_context().drafts.pop(request.draft_id, None)
+    return get_context().character_payload(record)
 
 
 @app.put("/api/characters/{character_id}/skills")
 def update_character_skills(character_id: str, request: SkillUpdateRequest):
-    record = service.characters.get(character_id)
+    record = get_context().characters.get(character_id)
     if record.sheet.occupation_id is None:
         if request.skills is None:
             raise HTTPException(status_code=400, detail="旧版角色卡需要提交 skills 字段")
@@ -230,24 +253,24 @@ def update_character_skills(character_id: str, request: SkillUpdateRequest):
             occupation_skill_cap=record.sheet.occupation_skill_cap,
             non_occupation_skill_cap=record.sheet.non_occupation_skill_cap,
         )
-    return service.character_payload(service.characters.save(character_id, record.sheet))
+    return get_context().character_payload(get_context().characters.save(character_id, record.sheet))
 
 
 @app.delete("/api/characters/{character_id}")
 def delete_character(character_id: str):
-    record = service.characters.get(character_id)
-    games = service.referencing_games(character_id=character_id)
+    record = get_context().characters.get(character_id)
+    games = get_context().referencing_games(character_id=character_id)
     if games:
         titles = "、".join(game.title for game in games[:3])
         suffix = "等" if len(games) > 3 else ""
         raise HTTPException(status_code=409, detail=f"角色卡正被战役「{titles}」{suffix}使用，请先删除这些战役")
-    service.characters.delete(character_id)
+    get_context().characters.delete(character_id)
     return {"id": record.id, "name": record.sheet.name, "deleted": True}
 
 
 @app.get("/api/character-drafts/{draft_id}/candidates/{candidate_index}/occupations/{occupation_id}")
 def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
-    candidates = service.drafts.get(draft_id)
+    candidates = get_context().drafts.get(draft_id)
     if candidates is None:
         raise HTTPException(status_code=404, detail="建卡候选已过期，请重新生成")
     if not 0 <= candidate_index < len(candidates):
@@ -262,12 +285,12 @@ def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
 
 @app.get("/api/modules")
 def list_modules():
-    return [service.module_payload(record) for record in service.modules.list()]
+    return [get_context().module_payload(record) for record in get_context().modules.list()]
 
 
 @app.get("/api/modules/{module_id}")
 def get_module(module_id: str):
-    return service.module_detail_payload(service.modules.get(module_id))
+    return get_context().module_detail_payload(get_context().modules.get(module_id))
 
 
 @app.put("/api/modules/{module_id}")
@@ -278,137 +301,131 @@ def update_module(module_id: str, request: ModuleUpdateRequest):
         **request.model_dump(), "title": request.title.strip(),
         "source_name": request.source_name.strip(), "version": 2,
     })
-    return service.module_detail_payload(service.modules.save(module_id, module))
+    return get_context().module_detail_payload(get_context().modules.save(module_id, module))
 
 
 @app.post("/api/modules/{module_id}/analyze", status_code=202)
-def analyze_module(module_id: str, use_vision: bool = False):
+def analyze_module(module_id: str, reparse: bool = False, review: bool = True):
+    context = get_context()
     settings = Settings()
-    if not settings.is_configured:
-        raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API，无法进行模组深度分析")
-    vision_settings = GrokVisionSettings()
-    record = service.modules.get(module_id)
-    source_pdf = service.modules.source_pdf_path(module_id)
-    if use_vision and not vision_settings.is_configured:
-        raise HTTPException(status_code=503, detail="尚未配置 GROK_API 和 GROK_API_KEY，无法进行视觉校正")
-    if use_vision and source_pdf is None:
-        raise HTTPException(status_code=409, detail="该旧模组未保留原始 PDF，请重新上传后再使用视觉校正")
-    current = service.analysis_jobs.get(module_id)
-    if current and current.get("status") == "running":
-        return current
-    job = {
-        "module_id": module_id, "status": "running", "stage": "准备分析", "error": None,
-        "use_vision": use_vision,
-    }
-    service.analysis_jobs[module_id] = job
-
-    def run_analysis() -> None:
-        try:
-            record = service.modules.get(module_id)
-            module = record.module
-            if use_vision:
-                result = GrokPDFVisionExtractor(
-                    LLMClient(vision_settings), progress=lambda stage: job.update(stage=stage),
-                ).extract(source_pdf)
-                module = PDFModuleImporter().import_pdf(
-                    source_pdf,
-                    title=record.module.title,
-                    page_text_override=result.pages,
-                    extraction_metadata=result.metadata(),
-                )
-                module.source_name = record.module.source_name
-            analyzer = LLMModuleAnalyzer(
-                LLMClient(settings), progress=lambda stage: job.update(stage=stage),
-            )
-            module = analyzer.analyze(module)
-            service.modules.save(module_id, module)
-            job.update(status="completed", stage="分析完成", analysis=module.analysis)
-        except Exception as exc:  # noqa: BLE001 - invalid analysis must not overwrite the stored module
-            job.update(status="failed", stage="分析失败", error=f"{type(exc).__name__}: {exc}")
-
-    threading.Thread(target=run_analysis, name=f"module-analysis-{module_id[:8]}", daemon=True).start()
-    return job
+    if (reparse or review) and not settings.mineru_api_key:
+        raise HTTPException(status_code=503, detail="尚未配置 MINERU_API_KEY，无法解析 PDF")
+    context.modules.get(module_id)
+    if context.modules.source_pdf_path(module_id) is None:
+        raise HTTPException(status_code=409, detail="该模组未保留原始 PDF，请删除后重新导入")
+    job_id = context.module_service.reanalyze(module_id, reparse=reparse, review=review)
+    context.module_jobs[module_id] = job_id
+    payload = context.jobs.get(job_id)
+    payload["module_id"] = module_id
+    return payload
 
 
 @app.get("/api/modules/{module_id}/analysis")
 def module_analysis_status(module_id: str):
-    record = service.modules.get(module_id)
-    return service.analysis_jobs.get(module_id, {
+    context = get_context()
+    record = context.modules.get(module_id)
+    job_id = context.module_jobs.get(module_id)
+    if job_id:
+        try:
+            payload = context.jobs.get(job_id)
+            payload["analysis"] = record.module.analysis
+            return payload
+        except FileNotFoundError:
+            pass
+    return {
         "module_id": module_id, "status": "idle", "stage": "尚未启动",
         "error": None, "analysis": record.module.analysis,
-    })
+    }
+
+
+@app.get("/api/imports/{job_id}")
+def import_status(job_id: str):
+    return get_context().jobs.get(job_id)
 
 
 @app.delete("/api/modules/{module_id}")
 def delete_module(module_id: str):
-    record = service.modules.get(module_id)
-    games = service.referencing_games(module_id=module_id)
+    record = get_context().modules.get(module_id)
+    games = get_context().referencing_games(module_id=module_id)
     if games:
         titles = "、".join(game.title for game in games[:3])
         suffix = "等" if len(games) > 3 else ""
         raise HTTPException(status_code=409, detail=f"模组正被战役「{titles}」{suffix}使用，请先删除这些战役")
-    service.modules.delete(module_id)
+    get_context().modules.delete(module_id)
     return {"id": record.id, "title": record.module.title, "deleted": True}
 
 
-@app.post("/api/modules/path")
+@app.post("/api/modules/path", status_code=202)
 def import_module_path(request: ModulePathRequest):
-    return service.module_payload(service.modules.import_pdf(request.path, title=request.title))
+    context = get_context()
+    source = Path(request.path)
+    if not source.exists():
+        raise FileNotFoundError(source)
+    job_id = context.module_service.import_pdf(source, title=request.title)
+    payload = context.jobs.get(job_id)
+    payload["job_id"] = job_id
+    return payload
 
 
-@app.post("/api/modules/upload")
+@app.post("/api/modules/upload", status_code=202)
 async def upload_module(file: UploadFile = File(...), title: str | None = Form(default=None)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="请选择 PDF 模组")
     content = await file.read(64 * 1024 * 1024 + 1)
     if len(content) > 64 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="PDF 不能超过 64 MB")
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=service.data_root) as temporary:
+    context = get_context()
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=context.data_root) as temporary:
         temporary.write(content)
         temp_path = Path(temporary.name)
-    try:
-        record = service.modules.import_pdf(temp_path, title=title or Path(file.filename).stem)
-        record.module.source_name = Path(file.filename).name
-        return service.module_payload(service.modules.save(record.id, record.module))
-    finally:
-        temp_path.unlink(missing_ok=True)
+    job_id = context.module_service.import_pdf(
+        temp_path,
+        title=title or Path(file.filename).stem,
+        source_name=Path(file.filename).name,
+        remove_source=True,
+    )
+    payload = context.jobs.get(job_id)
+    payload["job_id"] = job_id
+    return payload
 
 
 @app.get("/api/games")
 def list_games():
-    return [service.game_payload(record, include_transcript=False) for record in service.games.list()]
+    return [get_context().game_payload(record, include_transcript=False) for record in get_context().games.list()]
 
 
 @app.post("/api/games")
 def create_game(request: GameCreateRequest):
-    character = service.characters.get(request.character_id)
-    module = service.modules.get(request.module_id)
+    character = get_context().characters.get(request.character_id)
+    module = get_context().modules.get(request.module_id)
+    if module.module.analysis.get("status") == "failed":
+        raise HTTPException(status_code=409, detail="模组解析失败，无法开始战役")
     sheet = CharacterSheet.from_dict(character.sheet.to_dict())
     session = Session(
         investigator=sheet, module=ModuleRuntime(module.module),
         character_id=character.id, module_id=module.id,
     )
-    record = service.games.create(request.title, character.id, module.id, session)
-    return service.game_payload(record)
+    record = get_context().games.create(request.title, character.id, module.id, session)
+    return get_context().game_payload(record)
 
 
 @app.get("/api/games/{game_id}")
 def get_game(game_id: str):
-    return service.game_payload(service.games.get(game_id))
+    return get_context().game_payload(get_context().games.get(game_id))
 
 
 @app.delete("/api/games/{game_id}")
 def delete_game(game_id: str):
-    with service.lock(game_id):
-        record = service.games.get(game_id)
-        service.games.delete(game_id)
+    with get_context().lock(game_id):
+        record = get_context().games.get(game_id)
+        get_context().games.delete(game_id)
     return {"id": record.id, "title": record.title, "deleted": True}
 
 
 @app.post("/api/games/{game_id}/messages")
 def send_message(game_id: str, request: MessageRequest):
-    with service.lock(game_id):
-        record = service.games.get(game_id)
+    with get_context().lock(game_id):
+        record = get_context().games.get(game_id)
         relevant = record.relevant_history(request.content)
         prompt = KP_SYSTEM_PROMPT
         if relevant:
@@ -429,11 +446,11 @@ def send_message(game_id: str, request: MessageRequest):
             TranscriptEntry("user", request.content), TranscriptEntry("assistant", reply),
         ])
         record.memory = agent.memory.snapshot()
-        service.games.save(record)
-        service.characters.save(record.character_id, record.session.investigator)
+        get_context().games.save(record)
+        get_context().characters.save(record.character_id, record.session.investigator)
         return {
             "reply": reply,
-            "game": service.game_payload(record),
+            "game": get_context().game_payload(record),
             "trace": agent.tracer.summary(),
         }
 

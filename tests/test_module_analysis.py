@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from coc_keeper.agent.llm import LLMResponse
 from coc_keeper.module_analysis import LLMModuleAnalyzer, _extract_json
-from coc_keeper.modules import KeeperModule, ModuleSection
+from coc_keeper.modules import KeeperModule, ModuleScene
 
 
 class FakeClient:
@@ -41,7 +41,7 @@ def test_extract_json_accepts_fenced_payload():
 
 def test_llm_analysis_builds_entities_scenes_and_story_without_losing_source():
     original = KeeperModule("旧宅", "house.pdf", [
-        ModuleSection("scene-local", "本地页块", "当前场景", 1, 2, "===== 第 1 页 =====\n原始 PDF 内容。"),
+        ModuleScene("scene-local", "本地页块", "当前场景", 1, 2, "===== 第 1 页 =====\n原始 PDF 内容。"),
     ])
     payload = {
         "actors": [{
@@ -69,12 +69,12 @@ def test_llm_analysis_builds_entities_scenes_and_story_without_losing_source():
     assert analyzed.scene_text(analyzed.scenes[0]).endswith("原始 PDF 内容。")
     assert analyzed.story.outline == ["调查书房", "发现日记"]
     assert analyzed.analysis["status"] == "complete"
-    assert "PDF 原文" in client.messages[1]["content"]
+    assert "MinerU 原文" in client.messages[1]["content"]
 
 
 def test_llm_analysis_falls_back_per_stage_and_remains_loadable():
     original = KeeperModule("旧宅", "house.pdf", [
-        ModuleSection("scene-local", "本地场景", "当前场景", 1, 1, "原始内容。"),
+        ModuleScene("scene-local", "本地场景", "当前场景", 1, 1, "原始内容。"),
     ])
     client = FailingSceneClient({"actors": []})
     analyzed = LLMModuleAnalyzer(client).analyze(original)

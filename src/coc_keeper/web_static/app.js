@@ -330,7 +330,7 @@ function openSkillEditor(id) {
 function renderModules() {
   const rows = state.modules.map((item) => `<div class="collection-row module-row"><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.source_name)} · ${item.pages} 页</div></div><span class="context-badge">Keeper 私密</span><div class="row-actions"><button class="button edit-module" data-id="${item.id}" type="button">${icon("file-pen-line")}检查 / 编辑</button><button class="icon-button danger delete-module" data-id="${item.id}" data-title="${esc(item.title)}" type="button" aria-label="删除模组 ${esc(item.title)}" title="删除模组">${icon("trash-2")}</button></div></div>`).join("");
   content.innerHTML = `<section class="page"><header class="page-header"><h1>模组库</h1></header>
-    <form class="upload-band" id="module-upload"><div class="field"><label for="module-title">模组名称</label><input id="module-title" name="title" placeholder="默认使用文件名"></div><div class="field"><label for="module-file">PDF 文件</label><input class="file-field" id="module-file" name="file" type="file" accept="application/pdf" required></div><label class="toggle-field" for="module-deep-analysis"><input id="module-deep-analysis" type="checkbox" ${state.status?.vision?.configured ? "checked" : ""}><span>${state.status?.vision?.configured ? `Grok ${esc(state.status.vision.model)} 视觉校正 + DeepSeek 分析` : "DeepSeek 文本分析"}</span></label><button class="button primary" type="submit">${icon("upload")}导入模组</button></form>
+    <form class="upload-band" id="module-upload"><div class="field"><label for="module-title">模组名称</label><input id="module-title" name="title" placeholder="默认使用文件名"></div><div class="field"><label for="module-file">PDF 文件</label><input class="file-field" id="module-file" name="file" type="file" accept="application/pdf" required></div><div class="row-meta">${state.status?.mineru?.configured ? `MinerU 解析 + DeepSeek ${esc(state.status?.review?.model || "复核")}` : "未配置 MINERU_API_KEY，无法导入 PDF"} · ${state.status?.review?.configured ? "DeepSeek 已配置" : "DeepSeek 未配置（仅 MinerU 原文）"}</div><button class="button primary" type="submit" ${state.status?.mineru?.configured ? "" : "disabled"}>${icon("upload")}导入模组</button></form>
     ${rows ? `<div class="collection">${rows}</div>` : `<div class="empty-state"><div>${icon("book-open-text")}<h2>模组库为空</h2></div></div>`}
   </section>`;
   document.querySelector("#module-upload").addEventListener("submit", uploadModule);
@@ -341,21 +341,27 @@ function renderModules() {
 async function uploadModule(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const deepAnalysis = form.querySelector("#module-deep-analysis").checked;
   const data = new FormData(form);
   form.classList.add("loading");
   try {
     const imported = await api("/api/modules/upload", {method: "POST", body: data});
-    if (deepAnalysis) {
-      const useVision = Boolean(state.status?.vision?.configured);
-      await api(`/api/modules/${imported.id}/analyze?use_vision=${useVision}`, {method: "POST"});
-      await waitForModuleAnalysis(imported.id);
-    }
+    await waitForImport(imported.job_id);
     form.reset();
     await loadModules();
-    notify(deepAnalysis ? "模组已导入并完成深度分析" : "模组已导入，等待人工校对");
+    notify("模组已导入，等待人工校对");
   } catch (error) { notify(error.message, true); }
   finally { form.classList.remove("loading"); }
+}
+
+async function waitForImport(jobId) {
+  let lastStage = "";
+  for (;;) {
+    const job = await api(`/api/imports/${jobId}`);
+    if (job.stage && job.stage !== lastStage) { lastStage = job.stage; notify(job.stage); }
+    if (job.status === "completed") return job.result;
+    if (job.status === "failed") throw new Error(`模组导入失败：${job.error || "未知错误"}`);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
 }
 
 async function waitForModuleAnalysis(id) {
@@ -364,7 +370,7 @@ async function waitForModuleAnalysis(id) {
     const job = await api(`/api/modules/${id}/analysis`);
     if (job.stage && job.stage !== lastStage) { lastStage = job.stage; notify(job.stage); }
     if (job.status === "completed") return api(`/api/modules/${id}`);
-    if (job.status === "failed") throw new Error(`模组深度分析失败：${job.error || "未知错误"}`);
+    if (job.status === "failed") throw new Error(`模组复核失败：${job.error || "未知错误"}`);
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
 }
@@ -424,8 +430,10 @@ function moduleEdgeHTML(edge, index, nodes) {
 }
 
 function moduleSourceHTML(chunk, index) {
-  const hybrid = chunk.extraction_method === "hybrid-vision";
-  return `<details class="module-record module-source" data-index="${index}"><summary><span>${esc(chunk.heading || chunk.id)}</span><span class="row-meta">第 ${esc(chunk.page_start)}-${esc(chunk.page_end)} 页 · ${hybrid ? "视觉交叉校正" : "PDF 文本层"}</span></summary><div class="module-section-fields"><div class="form-grid module-meta-grid"><div class="field"><label>片段 ID</label><input data-field="id" value="${esc(chunk.id)}" required></div><div class="field"><label>标题</label><input data-field="heading" value="${esc(chunk.heading)}"></div><div class="field"><label>起始页</label><input data-field="page_start" type="number" min="0" value="${esc(chunk.page_start)}"></div><div class="field"><label>结束页</label><input data-field="page_end" type="number" min="0" value="${esc(chunk.page_end)}"></div></div><input data-field="extraction_method" type="hidden" value="${esc(chunk.extraction_method || "text")}"><div class="module-list-grid"><div class="field"><label>${hybrid ? "Grok 视觉校正文" : "分析用文本"}</label><textarea data-field="text" rows="16">${esc(chunk.text)}</textarea></div><div class="field"><label>PDF 文本层原文（审计依据）</label><textarea data-field="raw_text" rows="16" ${hybrid ? "" : "readonly"}>${esc(chunk.raw_text || chunk.text)}</textarea></div></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="source_chunks" data-index="${index}" type="button">${icon("trash-2")}删除原文片段</button></div></div></details>`;
+  const method = chunk.extraction_method || "mineru";
+  const reviewed = method === "mineru+deepseek";
+  const label = method === "hybrid-vision" ? "旧版视觉校正（不支持）" : reviewed ? "MinerU + DeepSeek 复核" : method === "manual" ? "人工编辑" : "MinerU 原文";
+  return `<details class="module-record module-source" data-index="${index}"><summary><span>${esc(chunk.heading || chunk.id)}</span><span class="row-meta">第 ${esc(chunk.page_start)}-${esc(chunk.page_end)} 页 · ${label}</span></summary><div class="module-section-fields"><div class="form-grid module-meta-grid"><div class="field"><label>片段 ID</label><input data-field="id" value="${esc(chunk.id)}" required></div><div class="field"><label>标题</label><input data-field="heading" value="${esc(chunk.heading)}"></div><div class="field"><label>起始页</label><input data-field="page_start" type="number" min="0" value="${esc(chunk.page_start)}"></div><div class="field"><label>结束页</label><input data-field="page_end" type="number" min="0" value="${esc(chunk.page_end)}"></div></div><input data-field="extraction_method" type="hidden" value="${esc(method)}"><div class="module-list-grid"><div class="field"><label>${reviewed ? "DeepSeek 复核稿" : "MinerU 原文"}</label><textarea data-field="text" rows="16">${esc(chunk.text)}</textarea></div><div class="field"><label>MinerU 原文（审计依据）</label><textarea data-field="raw_text" rows="16" readonly>${esc(chunk.raw_text || chunk.text)}</textarea></div></div><div class="module-section-actions"><button class="button remove-module-item" data-kind="source_chunks" data-index="${index}" type="button">${icon("trash-2")}删除原文片段</button></div></div></details>`;
 }
 
 function collectModuleEditor() {
@@ -434,7 +442,8 @@ function collectModuleEditor() {
   const scenes = [...document.querySelectorAll(".module-scene")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), keeper_title: element.querySelector('[data-field="keeper_title"]').value.trim(), public_title: element.querySelector('[data-field="public_title"]').value.trim(), location_id: element.querySelector('[data-field="location_id"]').value.trim(), summary: element.querySelector('[data-field="summary"]').value.trim(), atmosphere: element.querySelector('[data-field="atmosphere"]').value.trim(), entry_conditions: splitModuleLines(element.querySelector('[data-field="entry_conditions"]').value), exits: splitModuleLines(element.querySelector('[data-field="exits"]').value), actor_ids: splitModuleIds(element.querySelector('[data-field="actor_ids"]').value), clues: parseModuleJSON(element.querySelector('[data-field="clues"]'), [], "场景线索"), events: parseModuleJSON(element.querySelector('[data-field="events"]'), [], "场景事件"), objectives: splitModuleLines(element.querySelector('[data-field="objectives"]').value), secrets: splitModuleLines(element.querySelector('[data-field="secrets"]').value), source_chunk_ids: splitModuleIds(element.querySelector('[data-field="source_chunk_ids"]').value), page_start: Number(element.querySelector('[data-field="page_start"]').value), page_end: Number(element.querySelector('[data-field="page_end"]').value)}));
   const nodes = [...document.querySelectorAll(".module-node")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), title: element.querySelector('[data-field="title"]').value.trim(), scene_id: element.querySelector('[data-field="scene_id"]').value, kind: element.querySelector('[data-field="kind"]').value, summary: element.querySelector('[data-field="summary"]').value.trim(), prerequisites: splitModuleLines(element.querySelector('[data-field="prerequisites"]').value), effects: splitModuleLines(element.querySelector('[data-field="effects"]').value)}));
   const edges = [...document.querySelectorAll(".module-edge")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), source: element.querySelector('[data-field="source"]').value, target: element.querySelector('[data-field="target"]').value, condition: element.querySelector('[data-field="condition"]').value.trim(), choice_label: element.querySelector('[data-field="choice_label"]').value.trim(), is_default: element.querySelector('[data-field="is_default"]').checked, secret: element.querySelector('[data-field="secret"]').checked}));
-  const sourceChunks = [...document.querySelectorAll(".module-source")].map((element) => ({id: element.querySelector('[data-field="id"]').value.trim(), heading: element.querySelector('[data-field="heading"]').value.trim(), page_start: Number(element.querySelector('[data-field="page_start"]').value), page_end: Number(element.querySelector('[data-field="page_end"]').value), text: element.querySelector('[data-field="text"]').value, raw_text: element.querySelector('[data-field="raw_text"]').value, extraction_method: element.querySelector('[data-field="extraction_method"]').value}));
+  const originalChunks = new Map(((state.editingModule?.module?.source_chunks) || []).map((chunk) => [chunk.id, chunk]));
+  const sourceChunks = [...document.querySelectorAll(".module-source")].map((element) => { const id = element.querySelector('[data-field="id"]').value.trim(); const original = originalChunks.get(id) || {}; return {id, heading: element.querySelector('[data-field="heading"]').value.trim(), page_start: Number(element.querySelector('[data-field="page_start"]').value), page_end: Number(element.querySelector('[data-field="page_end"]').value), text: element.querySelector('[data-field="text"]').value, raw_text: element.querySelector('[data-field="raw_text"]').value, extraction_method: element.querySelector('[data-field="extraction_method"]').value, image_paths: original.image_paths || [], review: original.review || {}}; });
   return {
     title: document.querySelector("#edit-module-title").value.trim(),
     source_name: document.querySelector("#edit-module-source").value.trim(),
@@ -454,7 +463,7 @@ function renderModuleEditor() {
   const story = module.story || {outline: [], entry_node_id: "", nodes: [], edges: []};
   const status = module.analysis?.status === "complete" ? "深度分析完成" : module.analysis?.status === "partial" ? `部分分析完成 · ${module.analysis?.warnings?.length || 0} 项回退待校对` : "等待深度分析 / 人工校对";
   modalContent.innerHTML = `<form class="modal-body" id="module-editor"><h2 class="modal-title">结构化模组编辑器</h2><div class="module-editor-notice">Keeper 私密内容 · ${esc(status)} · 修改仅影响之后创建的战役</div><div class="form-grid module-header-grid"><div class="field"><label for="edit-module-title">模组名称</label><input id="edit-module-title" value="${esc(module.title)}" maxlength="200" required></div><div class="field"><label for="edit-module-source">来源文件</label><input id="edit-module-source" value="${esc(module.source_name)}" maxlength="260"></div></div>
-    <div class="module-editor-actions"><button class="button reanalyze-module" data-vision="false" type="button">${icon("sparkles")}文本重新分析</button>${state.status?.vision?.configured && state.editingModule.source_pdf_available ? `<button class="button reanalyze-module" data-vision="true" type="button">${icon("scan-text")}Grok 视觉交叉分析</button>` : ""}<button class="button primary" type="submit">${icon("save")}保存模组</button></div>
+    <div class="module-editor-actions">${state.editingModule.source_pdf_available && state.status?.mineru?.configured ? `<button class="button reanalyze-module" data-reparse="true" type="button">${icon("scan-text")}重新解析并复核</button><button class="button reanalyze-module" data-reparse="false" type="button">${icon("sparkles")}仅重新结构分析</button>` : ""}<button class="button primary" type="submit">${icon("save")}保存模组</button></div>
     <div class="module-editor-tabs" role="tablist"><button class="module-editor-tab active" data-tab="actors" role="tab" aria-selected="true" type="button">角色与怪物</button><button class="module-editor-tab" data-tab="scenes" role="tab" aria-selected="false" type="button">地点与场景</button><button class="module-editor-tab" data-tab="story" role="tab" aria-selected="false" type="button">故事线</button><button class="module-editor-tab" data-tab="source" role="tab" aria-selected="false" type="button">PDF 原文</button></div>
     <section class="module-editor-panel" data-panel="actors"><div class="module-editor-toolbar"><strong>角色与怪物</strong><button class="button add-module-item" data-kind="actors" type="button">${icon("plus")}添加实体</button></div><div class="module-sections">${(module.actors || []).map(moduleActorHTML).join("") || '<div class="editor-empty">暂无已提取实体</div>'}</div></section>
     <section class="module-editor-panel" data-panel="scenes" hidden><div class="module-editor-toolbar"><strong>地点</strong><button class="button add-module-item" data-kind="locations" type="button">${icon("plus")}添加地点</button></div><div class="module-sections">${(module.locations || []).map(moduleLocationHTML).join("")}</div><div class="module-editor-toolbar"><strong>可玩场景</strong><button class="button add-module-item" data-kind="scenes" type="button">${icon("plus")}添加场景</button></div><div class="module-sections">${(module.scenes || []).map(moduleSceneHTML).join("")}</div></section>
@@ -466,7 +475,7 @@ function renderModuleEditor() {
   document.querySelectorAll(".module-editor-tab").forEach((button) => button.addEventListener("click", () => activateModuleTab(button.dataset.tab)));
   document.querySelectorAll(".add-module-item").forEach((button) => button.addEventListener("click", () => addModuleItem(button.dataset.kind)));
   document.querySelectorAll(".remove-module-item").forEach((button) => button.addEventListener("click", () => removeModuleItem(button.dataset.kind, Number(button.dataset.index))));
-  document.querySelectorAll(".reanalyze-module").forEach((button) => button.addEventListener("click", () => reanalyzeModule(button.dataset.vision === "true")));
+  document.querySelectorAll(".reanalyze-module").forEach((button) => button.addEventListener("click", () => reanalyzeModule(button.dataset.reparse === "true")));
 }
 
 function addModuleItem(kind) {
@@ -501,17 +510,17 @@ function removeModuleItem(kind, index) {
   } catch (error) { notify(error.message, true); }
 }
 
-async function reanalyzeModule(useVision = false) {
-  const method = useVision ? `Grok ${state.status?.vision?.model || "4.5"} 将逐页视觉校正，随后由 DeepSeek` : "DeepSeek 将按现有文本";
-  if (!window.confirm(`${method} 重新生成结构化模组，并替换尚未保存的编辑。继续吗？`)) return;
+async function reanalyzeModule(reparse = false) {
+  const method = reparse ? "重新调用 MinerU 解析并由 DeepSeek 复核" : "使用现有复核稿重新做结构分析";
+  if (!window.confirm(`${method}，会替换尚未保存的编辑。继续吗？`)) return;
   const form = document.querySelector("#module-editor");
   form.classList.add("loading");
   try {
     const moduleId = state.editingModule.id;
-    await api(`/api/modules/${moduleId}/analyze?use_vision=${useVision}`, {method:"POST"});
+    await api(`/api/modules/${moduleId}/analyze?reparse=${reparse}&review=${reparse}`, {method:"POST"});
     state.editingModule = await waitForModuleAnalysis(moduleId);
     renderModuleEditor();
-    notify("模组深度分析已完成");
+    notify("模组分析已完成");
   } catch (error) { notify(error.message, true); form.classList.remove("loading"); }
 }
 
@@ -639,7 +648,7 @@ async function bootstrap() {
     ]);
     const provider = document.querySelector("#provider-status");
     provider.className = `provider-status ${state.status.configured ? "ready" : "error"}`;
-    provider.innerHTML = `<span class="status-dot"></span><span>${esc(state.status.model)} · ${Number(state.status.context_window).toLocaleString()}</span>`;
+    provider.innerHTML = `<span class="status-dot"></span><span>${esc(state.status.model)} · MinerU ${state.status.mineru?.configured ? "ready" : "missing"} · ${Number(state.status.context_window).toLocaleString()}</span>`;
     render();
   } catch (error) { notify(error.message, true); }
 }

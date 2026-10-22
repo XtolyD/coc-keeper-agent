@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from coc_keeper.agent.state import CampaignStore, Session
 from coc_keeper.character import CharacterSheet
-from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleSection
+from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleScene
 
 
 def test_session_multiplayer_roundtrip(tmp_path):
@@ -10,7 +10,7 @@ def test_session_multiplayer_roundtrip(tmp_path):
     session.scene = "旧宅门厅"
     session.log("发现线索", clue="染血钥匙")
     session.module = ModuleRuntime(KeeperModule("旧宅", "old-house.pdf", [
-        ModuleSection("scene-001", "门厅", "场景 1", 1, 2, "门厅内容"),
+        ModuleScene("scene-001", "门厅", "场景 1", 1, 2, "门厅内容"),
     ]))
     path = session.save(tmp_path / "campaign.json")
     restored = Session.load(path)

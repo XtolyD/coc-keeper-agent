@@ -8,8 +8,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pymupdf
-
 from .retrieval import Index, search
 
 
@@ -31,7 +29,7 @@ def _int_list(value: Any) -> list[int]:
 
 @dataclass
 class ModuleSourceChunk:
-    """Traceable raw PDF content. Gameplay scenes reference chunks instead of owning plot prose."""
+    """Traceable MinerU source content. Gameplay scenes reference chunks, not plot prose."""
 
     id: str
     heading: str
@@ -39,22 +37,32 @@ class ModuleSourceChunk:
     page_end: int
     text: str
     raw_text: str = ""
-    extraction_method: str = "text"
+    extraction_method: str = "mineru"
+    image_paths: list[str] = field(default_factory=list)
+    review: dict[str, Any] = field(default_factory=dict)
 
     def analysis_text(self) -> str:
-        """Give semantic analysis both sources while gameplay uses corrected ``text``."""
+        """给分析器同时提供复核稿与 MinerU 原文，供交叉核对。"""
         if self.raw_text.strip() and self.raw_text.strip() != self.text.strip():
-            return f"【视觉校正文】\n{self.text}\n\n【PDF 文本层原文】\n{self.raw_text}".strip()
+            return f"【DeepSeek 复核稿】\n{self.text}\n\n【MinerU 原文】\n{self.raw_text}".strip()
         return self.text
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModuleSourceChunk":
+        method = str(data.get("extraction_method", "mineru"))
+        if method == "hybrid-vision":
+            raise ValueError("旧版 hybrid-vision 模组不再支持，请删除后重新导入 PDF")
         return cls(
             id=str(data["id"]), heading=str(data.get("heading", "原文")),
             page_start=int(data.get("page_start", 0)), page_end=int(data.get("page_end", 0)),
             text=str(data.get("text", "")),
             raw_text=str(data.get("raw_text", "")),
-            extraction_method=str(data.get("extraction_method", "text")),
+            extraction_method=method,
+            image_paths=_string_list(data.get("image_paths")),
+            review=dict(data.get("review", {})),
         )
 
 
@@ -212,10 +220,6 @@ class ModuleScene:
             objectives=_string_list(data.get("objectives")), secrets=_string_list(data.get("secrets")),
             source_chunk_ids=_string_list(data.get("source_chunk_ids")),
         )
-
-
-# Source compatibility for extensions and saved test fixtures written against v1.
-ModuleSection = ModuleScene
 
 
 @dataclass
@@ -439,13 +443,10 @@ class KeeperModule:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "KeeperModule":
-        legacy = "scenes" not in data and "sections" in data
-        scenes_data = data.get("scenes", data.get("sections", []))
-        scenes = [ModuleScene.from_dict(item) for item in scenes_data]
+        if "scenes" not in data:
+            raise ValueError("旧版 sections 模组不再支持，请删除后重新导入 PDF")
+        scenes = [ModuleScene.from_dict(item) for item in data.get("scenes", [])]
         analysis = dict(data.get("analysis", {}))
-        if legacy:
-            analysis.setdefault("migration", "v1-sections-to-v2")
-            analysis.setdefault("status", "needs-review")
         return cls(
             title=str(data.get("title", "未命名模组")), source_name=str(data.get("source_name", "")),
             scenes=scenes, actors=[ModuleActor.from_dict(item) for item in data.get("actors", [])],
@@ -463,234 +464,6 @@ class KeeperModule:
     @classmethod
     def load(cls, path: str | Path) -> "KeeperModule":
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
-
-
-class PDFModuleImporter:
-    """Extract traceable source chunks and a conservative v2 structure from a PDF."""
-
-    def __init__(self, *, max_pages: int = 1000, max_pages_per_section: int = 2, max_page_chars: int = 30000):
-        self.max_pages = max(1, int(max_pages))
-        self.max_pages_per_section = max(1, int(max_pages_per_section))
-        self.max_page_chars = max(1000, int(max_page_chars))
-
-    def import_pdf(
-        self,
-        path: str | Path,
-        *,
-        title: str | None = None,
-        page_text_override: list[str] | None = None,
-        extraction_metadata: dict[str, Any] | None = None,
-    ) -> KeeperModule:
-        source = Path(path)
-        if source.suffix.lower() != ".pdf":
-            raise ValueError("模组文件必须是 PDF")
-        if not source.exists():
-            raise FileNotFoundError(source)
-        with pymupdf.open(source) as doc:
-            if doc.page_count < 1:
-                raise ValueError("PDF 没有页面")
-            if doc.page_count > self.max_pages:
-                raise ValueError(f"PDF 页数 {doc.page_count} 超过上限 {self.max_pages}")
-            stream_page_text = [
-                doc.load_page(index).get_text("text")[: self.max_page_chars].strip()
-                for index in range(doc.page_count)
-            ]
-            raw_page_text = [
-                doc.load_page(index).get_text("text", sort=True)[: self.max_page_chars].strip()
-                for index in range(doc.page_count)
-            ]
-            if page_text_override is not None and len(page_text_override) != doc.page_count:
-                raise ValueError("视觉校正页数与 PDF 页数不一致")
-            page_text = [str(item).strip() for item in page_text_override] if page_text_override is not None else raw_page_text
-            missing_text_layer = sum(len(text) for text in raw_page_text) < 20
-            if page_text_override is None and missing_text_layer:
-                page_text = [f"[第 {index + 1} 页无可提取文本，等待 Grok 视觉校正]" for index in range(doc.page_count)]
-            ranges = self._ranges(doc, page_text)
-
-        chunks: list[ModuleSourceChunk] = []
-        scenes: list[ModuleScene] = []
-        locations: list[ModuleLocation] = []
-        for index, (heading, start, end) in enumerate(ranges, 1):
-            text = "\n".join(
-                f"===== 第 {page + 1} 页 =====\n{page_text[page]}"
-                for page in range(start - 1, end) if page_text[page]
-            ).strip()
-            raw_text = "\n".join(
-                f"===== 第 {page + 1} 页 =====\n{raw_page_text[page]}"
-                for page in range(start - 1, end) if raw_page_text[page]
-            ).strip()
-            if not text:
-                continue
-            chunk_id = f"source-{index:03d}"
-            scene_id = f"scene-{index:03d}"
-            location_id = f"location-{index:03d}"
-            summary = KeeperModule._summarize(text, fallback=heading)
-            chunks.append(ModuleSourceChunk(
-                chunk_id, heading, start, end, text,
-                raw_text=raw_text if page_text_override is not None else "",
-                extraction_method="hybrid-vision" if page_text_override is not None else "text",
-            ))
-            locations.append(ModuleLocation(
-                location_id, heading, description=summary, source_pages=list(range(start, end + 1)),
-            ))
-            scenes.append(ModuleScene(
-                scene_id, heading, "当前场景", start, end, location_id=location_id,
-                summary=summary, source_chunk_ids=[chunk_id],
-            ))
-        if not scenes:
-            raise ValueError("PDF 中没有可用的文本场景")
-        inferred_title = title or (source.stem if missing_text_layer and page_text_override is None else self._infer_title(page_text, source.stem))
-        actor_sets = [self._extract_stat_blocks(stream_page_text)]
-        if page_text != stream_page_text:
-            actor_sets.append(self._extract_stat_blocks(page_text))
-        actors = self._merge_local_actors(actor_sets)
-        return KeeperModule(
-            inferred_title, source.name, scenes, actors=actors, locations=locations,
-            source_chunks=chunks, story=StoryGraph.linear(scenes),
-            analysis={
-                "mode": "local",
-                "status": "needs-vision" if missing_text_layer and page_text_override is None else "needs-review",
-                "schema": 2,
-                **({"vision": dict(extraction_metadata or {})} if page_text_override is not None else {}),
-            },
-        )
-
-    def _ranges(self, doc: pymupdf.Document, page_text: list[str]) -> list[tuple[str, int, int]]:
-        toc = [entry for entry in doc.get_toc(simple=True) if 1 <= int(entry[2]) <= doc.page_count]
-        if toc:
-            base_level = min(int(entry[0]) for entry in toc)
-            entries = [
-                (str(title).strip() or "未命名章节", int(page))
-                for level, title, page in toc if int(level) == base_level
-            ]
-        else:
-            entries = []
-        if not entries:
-            entries = [("开场", 1)]
-        if entries[0][1] > 1:
-            entries.insert(0, ("前置资料", 1))
-
-        ranges: list[tuple[str, int, int]] = []
-        for index, (heading, start) in enumerate(entries):
-            end = entries[index + 1][1] - 1 if index + 1 < len(entries) else len(page_text)
-            part = 1
-            cursor = start
-            while cursor <= end:
-                part_end = min(end, cursor + self.max_pages_per_section - 1)
-                suffix = f"（{part}）" if end - start + 1 > self.max_pages_per_section else ""
-                ranges.append((heading + suffix, cursor, part_end))
-                cursor = part_end + 1
-                part += 1
-        return ranges
-
-    @staticmethod
-    def _merge_local_actors(actor_sets: list[list[ModuleActor]]) -> list[ModuleActor]:
-        merged: list[ModuleActor] = []
-        by_name: dict[str, ModuleActor] = {}
-        for actors in actor_sets:
-            for actor in actors:
-                key = actor.name.strip().lower()
-                if not key or re.search(r"\d|%|技能|攻击方式", actor.name):
-                    continue
-                if key in by_name:
-                    current = by_name[key]
-                    current.attributes = {**actor.attributes, **current.attributes}
-                    current.skills = {**actor.skills, **current.skills}
-                    if not current.attacks:
-                        current.attacks = actor.attacks
-                    current.armor = current.armor or actor.armor
-                    current.sanity_loss = current.sanity_loss or actor.sanity_loss
-                    current.source_pages = _int_list(current.source_pages + actor.source_pages)
-                    continue
-                actor.id = f"actor-{len(merged) + 1:03d}"
-                by_name[key] = actor
-                merged.append(actor)
-        return merged
-
-    @staticmethod
-    def _infer_title(page_text: list[str], fallback: str) -> str:
-        for line in page_text[0].splitlines():
-            candidate = line.strip()
-            if 2 <= len(candidate) <= 80:
-                return candidate
-        return fallback
-
-    @staticmethod
-    def _extract_stat_blocks(page_text: list[str]) -> list[ModuleActor]:
-        """Conservatively capture CoC attribute blocks; semantic analysis can refine them later."""
-        actors: list[ModuleActor] = []
-        seen_names: set[str] = set()
-        stat_pattern = re.compile(
-            r"STR\s*(\d+)\s+CON\s*(\d+)\s+SIZ\s*(\d+)\s+DEX\s*(\d+)\s+INT\s*(\d+)\s+"
-            r"APP\s*(\d+)\s+POW\s*(\d+)\s+EDU\s*(\d+)\s+SAN\s*([\d*]+)\s+HP\s*(\d+)",
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        skill_pattern = re.compile(r"([\u4e00-\u9fffA-Za-z/.（）()·]+)\s*(\d+)%")
-        for page_number, text in enumerate(page_text, 1):
-            for match in stat_pattern.finditer(text):
-                raw_preceding = [line.strip() for line in text[max(0, match.start() - 240):match.start()].splitlines()]
-                preceding = [line.strip(" ，,\t") for line in raw_preceding]
-                candidates = [
-                    line for line in preceding if 1 < len(line) <= 50 and not re.match(r"^\d+\s*岁", line)
-                    and not re.search(r"角色与怪物|攻击方式|技能$", line)
-                ]
-                named_lines = [
-                    line.strip(" ，,\t") for line in raw_preceding
-                    if line.rstrip().endswith(("，", ",")) and 1 < len(line.strip(" ，,\t")) <= 50
-                ]
-                name = named_lines[-1] if named_lines else candidates[-1] if candidates else f"未命名角色-{len(actors) + 1}"
-                if name in seen_names:
-                    continue
-                seen_names.add(name)
-                values = match.groups()
-                attributes: dict[str, int | str] = dict(zip(
-                    ("STR", "CON", "SIZ", "DEX", "INT", "APP", "POW", "EDU"),
-                    (int(value) for value in values[:8]), strict=True,
-                ))
-                attributes["SAN"] = values[8]
-                attributes["HP"] = int(values[9])
-                tail = text[match.end():match.end() + 1800]
-                skills = {skill: int(value) for skill, value in skill_pattern.findall(tail)}
-                actors.append(ModuleActor(
-                    id=f"actor-{len(actors) + 1:03d}", name=name, attributes=attributes,
-                    skills=skills, source_pages=[page_number],
-                ))
-
-        combined = "\n".join(
-            f"===== 第 {page_number} 页 =====\n{text}"
-            for page_number, text in enumerate(page_text, 1)
-        )
-        header_pattern = re.compile(r"(?m)^([^\n，,。！？；：]{2,20})[，,]\s*\n([^\n。！？；：]{2,40})$")
-        headers = list(header_pattern.finditer(combined))
-        for match in headers:
-            name = match.group(1).strip()
-            if name in seen_names:
-                continue
-            block = combined[match.end():match.end() + 12_000]
-            if "攻击方式" not in block or not ("护甲" in block or "理智损失" in block):
-                continue
-            attacks = [
-                {"name": attack.strip(), "value": int(value), "damage": damage.strip()}
-                for attack, value, damage in re.findall(
-                    r"(?m)^([^\n]{1,40}?)\s+(\d+)%[^\n]*?伤害\s*([^\n]+)", block,
-                )
-            ]
-            armor_match = re.search(r"护甲[：:]\s*([^\n]+)", block)
-            sanity_match = re.search(r"理智损失[：:]\s*([^\n]+)", block)
-            pages = _int_list(re.findall(r"=====\s*第\s*(\d+)\s*页\s*=====", block))
-            if not pages:
-                before = combined[:match.start()]
-                markers = re.findall(r"=====\s*第\s*(\d+)\s*页\s*=====", before)
-                pages = [int(markers[-1])] if markers else []
-            seen_names.add(name)
-            actors.append(ModuleActor(
-                id=f"actor-{len(actors) + 1:03d}", name=name, kind="monster",
-                role=match.group(2).strip(), attacks=attacks,
-                armor=armor_match.group(1).strip() if armor_match else "",
-                sanity_loss=sanity_match.group(1).strip() if sanity_match else "",
-                source_pages=pages,
-            ))
-        return actors
 
 
 @dataclass
@@ -865,9 +638,3 @@ class ModuleRuntime:
             history=list(data.get("history", [])), current_node_id=str(current_node_id) if current_node_id else None,
             completed_nodes=list(data.get("completed_nodes", [])), variables=dict(data.get("variables", {})),
         )
-
-
-def load_module(path: str | Path, *, title: str | None = None) -> ModuleRuntime:
-    source = Path(path)
-    module = PDFModuleImporter().import_pdf(source, title=title) if source.suffix.lower() == ".pdf" else KeeperModule.load(source)
-    return ModuleRuntime(module)
