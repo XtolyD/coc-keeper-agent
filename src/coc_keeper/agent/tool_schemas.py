@@ -161,6 +161,52 @@ TOOLS_SCHEMA: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "resolve_skill",
+            "description": "根据玩家行动返回可能适用的技能候选、角色当前值和技能用法。只是参考，最终由 KP 选择。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "玩家行动原文"},
+                    "limit": {"type": "integer", "description": "最多候选数，默认3"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_skills",
+            "description": "按关键词或类别检索技能说明、别名、使用场景和替代技能。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "技能名、别名或用途关键词"},
+                    "category": {"type": "string", "description": "可选类别：investigation/social/combat/physical/technical/knowledge/medical/art/other"},
+                    "limit": {"type": "integer", "description": "最多返回条数，默认5"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_skill",
+            "description": "获取单个技能的完整说明、基础值、难度、孤注一掷与失败风格。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "技能名或别名，如 会计、取悦、表演、手枪"},
+                    "section": {"type": "string", "description": "可选：只看某个说明段落"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "module_status",
             "description": "查看当前模组和当前场景的 Keeper 专用进度，不向玩家展示返回原文。",
             "parameters": {"type": "object", "properties": {}},

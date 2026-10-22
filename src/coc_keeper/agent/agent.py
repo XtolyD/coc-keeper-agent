@@ -17,7 +17,7 @@ from ..config import Settings
 from .llm import LLMClient
 from .memory import Memory
 from .observability import TraceRecorder
-from .prompts import KP_SYSTEM_PROMPT, build_system_prompt, infer_action_skill
+from .prompts import KP_SYSTEM_PROMPT, build_system_prompt
 from .security import PromptGuard
 from .state import Session
 from .tool_registry import ToolRegistry
@@ -65,12 +65,6 @@ class KeeperAgent:
         if self.session.module and not resp.tool_calls and self.session.module.detects_spoiler(resp.content or ""):
             resp.content = "眼前的线索还不足以揭开更深的真相。空气里只剩下令人不安的沉默。你接下来要怎么做？"
 
-    def _required_action_check(self, user_input: str) -> dict | None:
-        skill = infer_action_skill(user_input)
-        if skill is None:
-            return None
-        return self.dispatch("roll_skill_check", {"skill": skill})
-
     @staticmethod
     def _check_summary(tool_name: str, result: dict) -> str | None:
         if not isinstance(result, dict) or "error" in result:
@@ -107,11 +101,8 @@ class KeeperAgent:
             return "你的行动包含试图改写系统规则或读取机密的信息，KP 不会执行。请只描述调查员在游戏世界中的行动。"
         self.memory.add_user(inspected.text)
         visible_checks: list[tuple[str, dict]] = []
-        required_check = self._required_action_check(inspected.text)
-        if required_check is not None:
-            visible_checks.append(("roll_skill_check", required_check))
         for _ in range(self.settings.max_steps):
-            self._refresh_system_prompt(required_check)
+            self._refresh_system_prompt()
             resp = self.llm.chat(self.memory.messages(), tools=self.tools.schema)
             self._record_llm(resp)
             self._apply_spoiler_gate(resp)
@@ -127,7 +118,7 @@ class KeeperAgent:
             self.memory.add_assistant(resp)
             return resp.content
         # 超过循环上限：让模型在无工具的情况下给出收尾叙述
-        self._refresh_system_prompt(required_check)
+        self._refresh_system_prompt()
         last = self.llm.chat(self.memory.messages())
         self._record_llm(last)
         self._apply_spoiler_gate(last)

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from coc_keeper.agent.agent import KeeperAgent
 from coc_keeper.agent.llm import LLMResponse
-from coc_keeper.agent.prompts import infer_action_skill
 from coc_keeper.agent.state import Session
 from coc_keeper.config import Settings
 from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleScene
@@ -62,16 +61,11 @@ def test_agent_injects_only_current_module_scene_and_blocks_spoiler():
     assert "幕后凶手" not in system_prompt
 
 
-def test_agent_automatically_checks_unambiguous_player_action():
+def test_agent_does_not_auto_roll_without_its_own_tool_call():
     agent = make_agent([LLMResponse(content="你挥拳砸向他的后颈。", usage={"total_tokens": 1})])
     reply = agent.respond("我想打晕NPC")
-    assert reply.startswith("【检定 · 格斗（斗殴）】")
+    assert reply == "你挥拳砸向他的后颈。"
     messages = agent.llm.calls[0][0]
     assert not any(message.get("tool_calls") for message in messages)
     assert not any(message["role"] == "tool" for message in messages)
-    assert "本轮已执行的行动检定" in messages[0]["content"]
-    assert "格斗（斗殴）" in messages[0]["content"]
-
-
-def test_action_skill_mapping_covers_stealth():
-    assert infer_action_skill("我要隐藏起来，避开守卫的视线") == "潜行"
+    assert "本轮已执行的行动检定" not in messages[0]["content"]

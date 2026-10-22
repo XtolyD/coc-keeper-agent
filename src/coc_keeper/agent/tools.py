@@ -17,6 +17,7 @@ from ..rules.checks import (
 )
 from ..rules.combat import Combatant, Weapon, resolve_attack
 from ..retrieval import Index, search_rules
+from ..skills import SkillCatalog, get_skill_catalog
 from .state import Session
 from .tool_schemas import TOOLS_SCHEMA
 
@@ -35,8 +36,8 @@ _ATTR_CN = {
 _ATTR_EN = ("STR", "CON", "DEX", "APP", "POW", "SIZ", "INT", "EDU", "LUCK")
 
 
-def resolve_value(session: Session, ref: str) -> tuple[str, int]:
-    """把技能/属性引用解析为 (名称, 数值)。支持数字、属性、技能名（含模糊匹配）。"""
+def resolve_value(session: Session, ref: str, catalog: SkillCatalog | None = None) -> tuple[str, int]:
+    """把技能/属性引用解析为 (名称, 数值)。支持数字、属性、别名与子技能。"""
     if ref is None:
         raise ValueError("缺少技能/属性名")
     s = str(ref).strip()
@@ -54,8 +55,12 @@ def resolve_value(session: Session, ref: str) -> tuple[str, int]:
     skills = session.investigator.skills
     if s in skills:
         return s, skills[s]
+    catalog = catalog or get_skill_catalog()
+    canonical = catalog.canonicalize(s)
+    if canonical in skills:
+        return canonical, skills[canonical]
     for name in skills:  # 模糊匹配（包含关系）
-        if s in name or name in s:
+        if s in name or name in s or canonical in name or name in canonical:
             return name, skills[name]
     raise ValueError(f"未找到技能/属性: {s!r}")
 
@@ -70,9 +75,11 @@ def make_dispatcher(
     rule_index: Index | None = None,
     tracer: Any = None,
     rng: random.Random | None = None,
+    skill_catalog: SkillCatalog | None = None,
 ) -> Callable[[str, Any], dict]:
     """返回 dispatch(tool_name, arguments) -> dict。arguments 为 dict 或 JSON 字符串。"""
     rng = rng or random
+    catalog = skill_catalog or get_skill_catalog()
 
     def _create_character(name: str = "调查员", age: int = 30) -> dict:
         c = create_character(name=name, age=age, rng=rng)
@@ -91,13 +98,59 @@ def make_dispatcher(
         bonus_dice: int = 0,
         penalty_dice: int = 0,
     ) -> dict:
-        label, value = resolve_value(session, skill)
+        try:
+            label, value = resolve_value(session, skill, catalog)
+        except ValueError as exc:
+            return {
+                "error": str(exc),
+                "candidates": catalog.resolve_action(
+                    str(skill), session.investigator.skills, limit=3,
+                ),
+            }
         r = skill_check(value, _DIFF.get(difficulty, Difficulty.REGULAR), int(bonus_dice), int(penalty_dice), rng)
         return {
             "检定项": label, "数值": value, "难度": difficulty,
             "目标值": r.target, "掷骰": r.roll, "结果": r.degree_name,
             "成功": r.success,
         }
+
+    def _resolve_skill(action: str, limit: int = 3) -> dict:
+        candidates = catalog.resolve_action(
+            action, session.investigator.skills, limit=max(1, min(int(limit), 5)),
+        )
+        return {
+            "action": action,
+            "candidates": candidates,
+            "note": "这些只是候选；由 KP 根据玩家意图、方法和情境选择最终技能。",
+        }
+
+    def _search_skills(query: str, category: str | None = None, limit: int = 5) -> dict:
+        hits = catalog.search(query, category=category, limit=max(1, min(int(limit), 10)))
+        return {
+            "query": query,
+            "skills": [
+                {
+                    **card.to_dict(),
+                    "value": session.investigator.skills.get(card.canonical_name),
+                }
+                for card, _score in hits
+            ],
+            "message": "未找到匹配技能" if not hits else f"找到 {len(hits)} 条技能",
+        }
+
+    def _get_skill(name: str, section: str | None = None) -> dict:
+        card = catalog.get(name)
+        if card is None:
+            return {
+                "error": f"未找到技能: {name}",
+                "candidates": catalog.resolve_action(name, session.investigator.skills),
+            }
+        payload = card.to_dict(detail=True)
+        payload["value"] = session.investigator.skills.get(card.canonical_name)
+        if section:
+            selected = card.sections.get(str(section))
+            payload["selected_section"] = selected if selected is not None else ""
+        return payload
 
     def _opposed_check(skill: str, opponent_value: int) -> dict:
         label, value = resolve_value(session, skill)
@@ -152,9 +205,10 @@ def make_dispatcher(
 
     def _set_skill(skill: str, value: int, player_name: str | None = None) -> dict:
         sheet = session.get_player(player_name)
+        name = catalog.canonicalize(skill) or str(skill).strip()
         value = _clamp(int(value), 0, 100)
-        sheet.skills[str(skill).strip()] = value
-        return {"调查员": sheet.name, "技能": str(skill).strip(), "数值": value}
+        sheet.skills[name] = value
+        return {"调查员": sheet.name, "技能": name, "数值": value}
 
     def _team_luck_check() -> dict:
         return {"团队幸运检定": session.team_luck_check(rng=rng)}
@@ -238,6 +292,9 @@ def make_dispatcher(
         "set_skill": _set_skill,
         "team_luck_check": _team_luck_check,
         "search_rules": _search_rules,
+        "resolve_skill": _resolve_skill,
+        "search_skills": _search_skills,
+        "get_skill": _get_skill,
         "module_status": _module_status,
         "search_module": _search_module,
         "advance_module": _advance_module,

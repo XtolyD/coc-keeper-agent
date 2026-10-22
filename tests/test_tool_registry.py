@@ -10,5 +10,5 @@ def test_tool_registry_exposes_schema_and_dispatches():
     names = [item["function"]["name"] for item in registry.schema]
     assert registry.schema is TOOLS_SCHEMA
     assert TOOLS_SCHEMA_COMPAT is TOOLS_SCHEMA
-    assert "get_character" in names
+    assert {"get_character", "resolve_skill", "search_skills", "get_skill"} <= set(names)
     assert registry.dispatch("get_character", {})["name"]

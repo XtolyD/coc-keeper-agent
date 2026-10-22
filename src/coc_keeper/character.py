@@ -19,7 +19,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .dice import half
+from .skill_data import SKILL_BASES, base_skill_values as _catalog_base_skill_values
 
 
 @dataclass
@@ -79,39 +79,11 @@ def movement(STR: int, DEX: int, SIZ: int, age: int = 30) -> int:
     return m
 
 
-#: 1920s 标准技能列表及其基础值（%）；None 表示由属性派生。
-SKILL_BASES: dict[str, Optional[int]] = {
-    "会计": 5, "人类学": 1, "估价": 5, "考古学": 1,
-    "艺术/手艺": 5, "魅惑": 15, "攀爬": 20, "信用评级": 0,
-    "克苏鲁神话": 0, "乔装": 5, "闪避": None, "汽车驾驶": 20,
-    "电气维修": 10, "话术": 5, "格斗（斗殴）": 25,
-    "射击（手枪）": 20, "射击（步枪/霰弹枪）": 25, "急救": 30,
-    "历史": 5, "恐吓": 15, "跳跃": 20, "母语": None, "外语": 1,
-    "法律": 5, "图书馆使用": 20, "聆听": 20, "锁匠": 1,
-    "机械维修": 10, "医学": 1, "博物学": 10, "导航": 10,
-    "神秘学": 5, "操作重型机械": 1, "说服": 10,
-    "驾驶（飞行/航海）": 1, "精神分析": 1, "心理学": 10,
-    "读唇": 1, "骑术": 5, "科学": 1, "妙手": 10, "侦查": 25,
-    "潜行": 20, "生存": 10, "游泳": 20, "投掷": 20, "追踪": 10,
-    "计算机使用": 5, "电子学": 1, "驯兽": 5, "潜水": 1,
-    "爆破": 1, "催眠": 1, "炮术": 1, "学识": 1,
-}
-
-
+#: 技能基础值由 skills_core.json 派生；None 表示由属性派生。
+#: 保留 SKILL_BASES 导出，供职业校验和旧调用方使用。
 def base_skill_values(attrs: Attributes) -> dict[str, int]:
     """计算各技能基础值（闪避 = DEX/2，母语 = EDU）。"""
-    out: dict[str, int] = {}
-    for name, base in SKILL_BASES.items():
-        if base is None:
-            if name == "闪避":
-                out[name] = half(attrs.DEX)
-            elif name == "母语":
-                out[name] = attrs.EDU
-            else:
-                out[name] = 0
-        else:
-            out[name] = base
-    return out
+    return _catalog_base_skill_values(attrs)
 
 
 @dataclass

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 
 from ..character import CharacterSheet
 
@@ -17,13 +16,14 @@ KP_SYSTEM_PROMPT = """你是《克苏鲁的呼唤》第七版（CoC 7th）的守
 4. 维护调查员状态（HP/MP/SAN/幸运/技能）——任何涉及数值变化的地方都必须调用工具落地。
 
 ## 工具使用纪律（最重要）
-- 需要判定成败时：先调用 roll_skill_check / opposed_check / luck_check / sanity_check，
-  拿到真实结果后再据实叙述，禁止跳过掷骰。
-- 玩家声明了存在失败可能或失败代价的行动时，不得直接宣布成功。常见对应关系：
-  打晕、拳击、徒手制服使用「格斗（斗殴）」；隐藏、潜入、避开视线使用「潜行」；
-  搜查与观察使用「侦查」；偷听使用「聆听」；开锁使用「锁匠」；说服使用「说服」；
-  欺骗套话使用「话术」；威胁使用「恐吓」；判断他人动机使用「心理学」。
-- 同一行动已有工具检定结果时不得重复掷骰。系统会单独向玩家显示判定摘要，你只需依据结果叙述后果。
+- 你是故事的主持者（KP），由你判断何时需要检定、使用哪个技能；工具只提供结果与参考。
+- 玩家声明了结果不确定且失败有代价的行动时，才考虑检定；不要机械地为每个动作掷骰。
+- 行动可能涉及技能但你不确定时，先调用 resolve_skill 获取候选；它只给候选和理由，
+  最终选择必须结合玩家意图、行动方法和情境，由你决定。
+- 需要技能说明、基础值、难度、孤注一掷或失败风格时，调用 get_skill / search_skills。
+- 需要判定成败时：调用 roll_skill_check / opposed_check / luck_check / sanity_check，
+  拿到真实结果后再据实叙述，禁止跳过掷骰或自行编造结果。
+- 同一行动已有工具检定结果时不得重复掷骰；失败要付出代价或推动剧情，不能简单“再试一次”。
 - 玩家受伤、消耗魔法、损失理智：调用 update_character / sanity_check 落地数值。
 - 一次只做当前最必要的一步，不要一次性堆砌多个工具调用。
 - 若不确定某技能/属性是否存在，先调用 get_character 查看角色卡。
@@ -50,30 +50,6 @@ KP_SYSTEM_PROMPT = """你是《克苏鲁的呼唤》第七版（CoC 7th）的守
 - 用中文，直接叙述，不要输出你的内心独白、计划或工具调用细节。
 - 开场：先确认调查员角色卡，再用一段开场白把玩家拉进故事。
 """
-
-
-_ACTION_SKILL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("格斗（斗殴）", re.compile(r"打晕|击晕|拳打|揍|殴打|徒手攻击|徒手制服|擒住|扭打|搏斗")),
-    ("潜行", re.compile(r"隐藏起来|藏起来|躲起来|潜行|悄悄(?:靠近|跟踪|移动|潜入)|偷偷(?:靠近|跟踪|移动|潜入)|避开(?:视线|注意)")),
-    ("锁匠", re.compile(r"撬锁|开锁|解锁")),
-    ("侦查", re.compile(r"搜查|寻找线索|观察周围|仔细观察|检查房间")),
-    ("聆听", re.compile(r"偷听|仔细听|听听看|侧耳听")),
-    ("说服", re.compile(r"说服|劝说|劝服")),
-    ("话术", re.compile(r"套话|忽悠|编谎|撒谎|蒙骗")),
-    ("恐吓", re.compile(r"恐吓|威胁|吓唬")),
-    ("心理学", re.compile(r"判断.{0,6}(动机|说谎|真假)|看穿|察言观色")),
-    ("急救", re.compile(r"急救|包扎|止血")),
-    ("攀爬", re.compile(r"攀爬|爬墙|翻墙")),
-)
-
-
-def infer_action_skill(text: str) -> str | None:
-    """为明确且有风险的常见玩家行动提供确定性的技能检定提示。"""
-    action = str(text).strip()
-    for skill, pattern in _ACTION_SKILL_PATTERNS:
-        if pattern.search(action):
-            return skill
-    return None
 
 
 def character_summary(sheet: CharacterSheet) -> str:
