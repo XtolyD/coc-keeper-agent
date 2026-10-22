@@ -2,13 +2,13 @@
 """与模组无关的永久角色卡存储。"""
 from __future__ import annotations
 
-import json
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .storage import JsonRecordRepository
 
 from .character import (
     CharacterSheet, base_skill_values, interest_points_spent,
@@ -62,50 +62,31 @@ class CharacterRecord:
 
 class CharacterStore:
     def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def _path(self, record_id: str) -> Path:
-        if not re.fullmatch(r"[0-9a-f]{32}", record_id):
-            raise ValueError("角色卡 ID 必须是 32 位十六进制字符串")
-        return self.root / f"{record_id}.json"
-
-    @staticmethod
-    def _write(path: Path, payload: dict[str, Any]) -> None:
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        self.repository = JsonRecordRepository(
+            root,
+            id_pattern=r"[0-9a-f]{32}",
+            decode=CharacterRecord.from_dict,
+            encode=lambda record: record.to_dict(),
+            label="角色卡",
+            sort_key=lambda record: record.updated_at,
+        )
 
     def create(self, sheet: CharacterSheet) -> CharacterRecord:
         now = _now()
         record = CharacterRecord(uuid.uuid4().hex, sheet, now, now)
-        self._write(self._path(record.id), record.to_dict())
-        return record
+        return self.repository.put(record.id, record)
 
     def get(self, record_id: str) -> CharacterRecord:
-        path = self._path(record_id)
-        if not path.exists():
-            raise FileNotFoundError(f"角色卡不存在: {record_id}")
-        return CharacterRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        return self.repository.get(record_id)
 
     def save(self, record_id: str, sheet: CharacterSheet) -> CharacterRecord:
         current = self.get(record_id)
         current.sheet = sheet
         current.updated_at = _now()
-        self._write(self._path(record_id), current.to_dict())
-        return current
+        return self.repository.put(record_id, current)
 
     def delete(self, record_id: str) -> None:
-        path = self._path(record_id)
-        if not path.exists():
-            raise FileNotFoundError(f"角色卡不存在: {record_id}")
-        path.unlink()
+        self.repository.delete(record_id)
 
     def list(self) -> list[CharacterRecord]:
-        records: list[CharacterRecord] = []
-        for path in self.root.glob("*.json"):
-            try:
-                records.append(CharacterRecord.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-            except (ValueError, KeyError, json.JSONDecodeError):
-                continue
-        return sorted(records, key=lambda record: record.updated_at, reverse=True)
+        return self.repository.list()

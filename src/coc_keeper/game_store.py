@@ -2,8 +2,6 @@
 """持久战役记录：角色与模组独立引用，完整对话长期保存。"""
 from __future__ import annotations
 
-import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,6 +10,7 @@ from typing import Any
 
 from .agent.state import Session
 from .retrieval import Index, search
+from .storage import JsonRecordRepository
 
 
 def _now() -> str:
@@ -77,19 +76,14 @@ class GameRecord:
 
 class GameStore:
     def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def _path(self, game_id: str) -> Path:
-        if not re.fullmatch(r"[0-9a-f]{32}", game_id):
-            raise ValueError("战役 ID 必须是 32 位十六进制字符串")
-        return self.root / f"{game_id}.json"
-
-    @staticmethod
-    def _write(path: Path, payload: dict[str, Any]) -> None:
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        self.repository = JsonRecordRepository(
+            root,
+            id_pattern=r"[0-9a-f]{32}",
+            decode=GameRecord.from_dict,
+            encode=lambda record: record.to_dict(),
+            label="战役",
+            sort_key=lambda record: record.updated_at,
+        )
 
     def create(self, title: str, character_id: str, module_id: str, session: Session) -> GameRecord:
         record = GameRecord(uuid.uuid4().hex, title.strip() or "未命名战役", character_id, module_id, session)
@@ -98,26 +92,13 @@ class GameStore:
 
     def save(self, record: GameRecord) -> GameRecord:
         record.updated_at = _now()
-        self._write(self._path(record.id), record.to_dict())
-        return record
+        return self.repository.put(record.id, record)
 
     def get(self, game_id: str) -> GameRecord:
-        path = self._path(game_id)
-        if not path.exists():
-            raise FileNotFoundError(f"战役不存在: {game_id}")
-        return GameRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        return self.repository.get(game_id)
 
     def delete(self, game_id: str) -> None:
-        path = self._path(game_id)
-        if not path.exists():
-            raise FileNotFoundError(f"战役不存在: {game_id}")
-        path.unlink()
+        self.repository.delete(game_id)
 
     def list(self) -> list[GameRecord]:
-        records: list[GameRecord] = []
-        for path in self.root.glob("*.json"):
-            try:
-                records.append(GameRecord.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-            except (ValueError, KeyError, json.JSONDecodeError):
-                continue
-        return sorted(records, key=lambda record: record.updated_at, reverse=True)
+        return self.repository.list()
