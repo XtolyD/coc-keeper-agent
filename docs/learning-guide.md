@@ -29,21 +29,22 @@
 
 ## 第三阶段：拆开 RAG
 
-阅读 `rules/retrieval.py` 时按四段理解：分页切块、分词、文档频率、BM25 排序。
+阅读 `retrieval/` 时按四段理解：MinerU 实体分块、字级分词、文档频率、BM25 排序。
 先运行以下查询并查看页码，再阅读 Agent 工具接入：
 
 ```powershell
-python -c "from coc_keeper.rules.retrieval import load_default_index; print(load_default_index().search('奖励骰'))"
+python -c "from coc_keeper.retrieval import search_rules; print(search_rules('奖励骰'))"
 ```
 
 然后阅读《AI Engineering》的 RAG 章节。把 chunk、query、ranking、citation 四个概念与本项目中的
-`RuleChunk`、`RuleIndex.search` 和 `search_rules` 工具逐一对应。向量检索应作为对比实验，而不是默认替代 BM25。
+`Chunk`、`Index.build` / `search` 和 `search_rules` 工具逐一对应。向量检索应作为对比实验，而不是默认替代 BM25。
 
 ## 第四阶段：理解 PDF 模组的信息边界
 
 先读 `modules.py`，再读 `tests/test_modules.py`。重点区分原文块、角色/怪物、地点、场景和剧情图五个边界。
-观察 `KeeperModule.from_dict` 如何迁移旧 `sections`，`keeper_context` 如何只展开当前节点引用，以及 `advance`
-如何在完成目标后限制到当前可用分支。随后阅读 `module_analysis.py` 的分阶段 JSON 提取、引用校验和局部回退。
+观察 `keeper_context` 如何只展开当前节点引用，以及 `advance` 如何在完成目标后限制到当前可用分支。
+随后阅读 `module_pipeline/` 的 MinerU 解析、DeepSeek 复核、组装，以及 `module_analysis.py` 的分阶段 JSON 提取、
+引用校验和局部回退。
 
 建议练习：建立入口、调查和逃离三个节点，让入口同时连接后两个节点。先不传 `next_node_id` 验证运行时拒绝
 含糊推进，再选择其中一条边并保存/恢复；最后确认另一分支的秘密既无法检索，也无法被 Agent 直接复述。

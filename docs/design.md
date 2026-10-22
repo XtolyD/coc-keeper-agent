@@ -62,7 +62,10 @@
 
 第一阶段用仓库内实现的纯 Python **BM25**，不引入 embedding 服务：
 - 好处：零外部依赖、零模型下载、可解释（能看到命中哪段规则），便于学习检索本质。
-- 数据源：`data/rulebook/fulltext.txt`（380 页全文，按页切块，页号即出处）。
+- 解析：MinerU（`docparser/`）把规则书 PDF → 结构化 `content_list`，`segments/` 按标题层级分块，
+  产出 `rules_chunks.json`（供 `retrieval/` 消费）。
+- 数据源：`scripts/extract_rules_mineru.py --write data/rulebook/rules_chunks.json`（离线一次性）。
+- 检索运行时只加载 `rules_chunks.json`，不读 PDF、不再分块。
 
 第二阶段（可选）升级为**向量检索**（分块 + 中文 embedding + 向量库），对比
 BM25 与语义检索在规则查询上的差异。规则查询的难点在于：CoC 规则高度结构化
@@ -91,11 +94,20 @@ BM25 与语义检索在规则查询上的差异。规则查询的难点在于：
 如何回填、如何防止循环失控（最大步数）、如何强制结构化输出」。熟练之后再迁移到
 LangGraph，才能理解框架替你做了什么。
 
-### 3.3.1 PDF 模组运行时
+### 3.3.1 PDF 模组导入与运行时
 
 `modules.py` 使用 v2 模组 schema。PDF 原文存入 `source_chunks`；NPC/怪物存入 `actors`，地点存入
 `locations`，可玩局面存入 `scenes`，剧情因果与分支单独存入 `story.nodes/edges`。场景只引用原文、
-地点和出场实体，不再同时承担 PDF 容器与剧情顺序两种职责。旧 `sections` 数据加载时自动生成线性图。
+地点和出场实体，不再同时承担 PDF 容器与剧情顺序两种职责。
+
+模组导入由 `module_pipeline/` 编排，使用三个可注入端口：
+
+1. `DocumentParser`：MinerU 解析 PDF → `ParseResult`（content_list + images），按内容 hash 缓存。
+2. `ModuleReviewer`：DeepSeek 复核 MinerU 正文（阅读顺序/表格）并识别图片块。
+3. `ModuleAnalyzer`：DeepSeek 提取 actors/locations/scenes/story。
+
+`module_service.py` 负责把流水线、仓储和后台任务组合起来；Web 层只提交任务并轮询阶段，不直接处理
+PDF 或 LLM 调用。旧版 `hybrid-vision` 与 v1 `sections` schema 不再兼容，需重新导入 PDF。
 
 `module_analysis.py` 通过 DeepSeek 分阶段处理 Keeper 私密原文：先提取角色与怪物，再按小批次提取地点、
 场景、线索和事件，最后只基于已校验场景目录生成故事图。每阶段经过 ID 与引用校验；损坏批次回退到确定性
@@ -130,7 +142,7 @@ Keeper 工具仍可读取当前场景的完整内部状态。明确的常见行�
 默认执行本职 70、非本职 60 的 KP 上限，属性派生基础值已经高于该上限时不会被反向削减。
 
 应用不设置战役累计 token 预算。模型供应商仍有单次上下文窗口；默认 DeepSeek 配置使用
-`deepseek-v4-flash` 并声明 1,000,000 token 窗口，实际可用长度以供应商接口为准。
+`deepseek-v4-flash-vision-exp` 并声明 1,000,000 token 窗口，实际可用长度以供应商接口为准。
 
 ### 3.5 评估（M5）
 
@@ -147,12 +159,29 @@ Keeper 工具仍可读取当前场景的完整内部状态。明确的常见行�
 | 决策 | 选择 | 理由 |
 | --- | --- | --- |
 | 规则正确性 | 纯 Python 规则引擎 + 单元测试 | 规则必须确定、可测，不依赖 LLM 记忆 |
-| LLM | DeepSeek 负责语义结构化，Grok 4.5 负责 PDF 视觉校正 | 分离剧情推理与版面转录，交叉保留原文证据 |
+| LLM | DeepSeek 同时负责语义结构化与 PDF 复核 | MinerU 做版面解析，DeepSeek 复核正文/图片并生成剧情结构 |
+| PDF 解析 | MinerU（`docparser/`）+ hash 缓存 | 双栏/表格/图片/标题层级由专业解析器完成，运行时不再用 pymupdf |
+| 模组导入 | `ModuleImportPipeline` + Protocol 端口 | 解析/复核/分析可替换、可 mock，失败可按批次回退 |
+| 存储 | `JsonRecordRepository[T]` 组合复用 | 统一 ID 校验、原子写入与列表读取，不引入 ORM |
+| Web 后台任务 | `JobManager` + `AppContext` | 去掉全局任务字典与裸线程，便于测试与多实例 |
 | Agent 框架 | 先手写循环，后 LangGraph | 学透核心机制，再理解框架封装 |
 | RAG | 先 BM25，后向量 | 零依赖起步，理解检索本质，再做对比 |
 | 状态建模 | dataclass（规则）→ Pydantic（Agent 结构化输出） | 规则引擎零依赖，Agent 层需要校验与 schema |
 | 结构化输出 | JSON schema / tool calling | 保证工具参数合法、结果可解析 |
 | 界面 | CLI + 本地 WebUI | 私有 PDF 与永久状态保留在本机，界面直接覆盖日常跑团流程 |
+
+### 4.1 局部 OOP 边界
+
+本项目不追求全量 OOP，只在“有状态、有外部依赖、可替换实现”的位置使用类：
+
+- 领域模型与规则引擎保持 dataclass + 纯函数，便于确定性测试。
+- 模组导入用 `Protocol` 定义 `DocumentParser` / `ModuleReviewer` / `ModuleAnalyzer`，
+  外部服务以适配器注入；组合优先于继承。
+- Web 用 `AppContext` 注入依赖，`JobManager` 管理后台任务；测试可构造临时上下文。
+- 存储用 `JsonRecordRepository[T]` 组合复用，不引入 ORM 或 Active Record。
+- 工具层保留普通函数，仅用 `ToolRegistry` 收束 schema 与 dispatcher。
+
+不把骰子、检定、战斗、BM25、分词等纯函数改造成类；也不建立规则/技能继承树。
 
 ## 5. 一回合的数据流（示例：玩家开枪）
 
@@ -173,4 +202,4 @@ Keeper 工具仍可读取当前场景的完整内部状态。明确的常见行�
 - 向量检索与 BM25 的离线对比实验
 - MCP（Model Context Protocol）：把规则引擎/角色卡封装成 MCP 工具，供通用 Agent 复用
 - 角色卡版本历史、战役分支与并发更新控制
-- 视觉校正结果缓存、失败页重试与 PDF 页面级质量评分
+- 视觉复核结果缓存、失败批次重试与 PDF 页面级质量评分

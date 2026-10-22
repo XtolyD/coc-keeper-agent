@@ -1,8 +1,9 @@
 # ===== 规则引擎（无第三方运行时依赖）=====
-pymupdf>=1.24      # 仅 scripts/extract_rules.py 抽取规则书 PDF 使用
+pymupdf>=1.24      # 保留依赖；运行时不再用于 PDF 解析（仅 scripts/extract_rules_mineru.py 读页数）
 
 # ===== M3 KP Agent =====
 openai>=1.30       # OpenAI 兼容接口（micuapi/OpenRouter/DeepSeek 等）
+requests>=2.31     # MinerU 文档解析 API
 
 # ===== WebUI =====
 fastapi>=0.115

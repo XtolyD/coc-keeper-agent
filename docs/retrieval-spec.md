@@ -44,8 +44,7 @@
 - 表格/图片/公式独立成块；页眉/脚注/页码噪声跳过。
 - `img_path` 保留（image 块 → 图片文件，供 vision）。
 
-> 旧 pymupdf 几何管道（`rulebook.py`/`merge_fragments.py`/`build_chunks.py`/`chunker.py`）
-> 及其补丁（`ATTR_NAMES`、标点排除）已弃用，由 MinerU + segments 取代。
+> 旧 pymupdf 几何管道已从仓库删除，由 MinerU + segments 取代。
 
 ## 2. 设计原则
 
