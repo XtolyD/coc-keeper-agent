@@ -99,6 +99,12 @@ def test_sanity_check_fumble_loses_max(scripted):
     assert r.needs_temporary_check is True  # >= 5
 
 
+def test_sanity_never_drops_below_zero(scripted):
+    rng = scripted(0, 0)  # 大失败，失败损失取最大值 100
+    r = sanity_check(3, "0", "1d100", rng=rng)
+    assert r.san_after == 0
+
+
 def test_temporary_insanity_check(scripted):
     assert temporary_insanity_check(4, 50) is None  # 损失不足 5
     rng = scripted(0, 3)  # INT 检定 -> 30

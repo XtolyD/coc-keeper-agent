@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import random
 from typing import Any, Callable
 
 from ..character import create_character
@@ -14,6 +15,8 @@ from ..dice import Difficulty
 from ..rules.checks import (
     luck_check, opposed_check, sanity_check, skill_check,
 )
+from ..rules.combat import Combatant, Weapon, resolve_attack
+from ..retrieval import Index, search_rules
 from .state import Session
 
 _DIFF = {
@@ -60,16 +63,26 @@ def _clamp(v: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
-def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
+def make_dispatcher(
+    session: Session,
+    *,
+    rule_index: Index | None = None,
+    tracer: Any = None,
+    rng: random.Random | None = None,
+) -> Callable[[str, Any], dict]:
     """返回 dispatch(tool_name, arguments) -> dict。arguments 为 dict 或 JSON 字符串。"""
+    rng = rng or random
 
     def _create_character(name: str = "调查员", age: int = 30) -> dict:
-        c = create_character(name=name, age=age)
-        session.investigator = c
+        c = create_character(name=name, age=age, rng=rng)
+        if len(session.players) == 1 and session.investigator.name in session.players:
+            session.players.pop(session.investigator.name, None)
+            session.investigator = c
+        session.add_player(c)
         return {"message": f"已创建调查员「{name}」", "character": c.to_dict()}
 
-    def _get_character() -> dict:
-        return session.investigator.to_dict()
+    def _get_character(name: str | None = None) -> dict:
+        return session.get_player(name).to_dict()
 
     def _roll_skill_check(
         skill: str,
@@ -78,7 +91,7 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
         penalty_dice: int = 0,
     ) -> dict:
         label, value = resolve_value(session, skill)
-        r = skill_check(value, _DIFF.get(difficulty, Difficulty.REGULAR), int(bonus_dice), int(penalty_dice))
+        r = skill_check(value, _DIFF.get(difficulty, Difficulty.REGULAR), int(bonus_dice), int(penalty_dice), rng)
         return {
             "检定项": label, "数值": value, "难度": difficulty,
             "目标值": r.target, "掷骰": r.roll, "结果": r.degree_name,
@@ -87,7 +100,7 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
 
     def _opposed_check(skill: str, opponent_value: int) -> dict:
         label, value = resolve_value(session, skill)
-        r = opposed_check(value, int(opponent_value))
+        r = opposed_check(value, int(opponent_value), rng=rng)
         winner_cn = {"a": "我方", "b": "对方", "tie": "平手"}[r.winner]
         return {
             "我方检定项": label, "我方数值": value, "我方掷骰": r.roll_a, "我方结果": r.degree_a_name,
@@ -96,7 +109,7 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
         }
 
     def _luck_check() -> dict:
-        r = luck_check(session.investigator.luck)
+        r = luck_check(session.investigator.luck, rng=rng)
         return {
             "当前幸运": session.investigator.luck, "掷骰": r.roll,
             "结果": r.degree_name, "成功": r.success,
@@ -104,11 +117,13 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
 
     def _sanity_check(loss_success: str, loss_failure: str) -> dict:
         c = session.investigator
-        r = sanity_check(c.san, loss_success, loss_failure)
+        before = c.san
+        r = sanity_check(c.san, loss_success, loss_failure, rng=rng)
         c.san = r.san_after
+        event = session.insanity.record_loss(r.loss, before, c.attributes.INT, rng=rng)
         out = {
             "掷骰": r.roll, "结果": r.degree_name, "成功": r.success,
-            "损失理智": r.loss, "当前理智": c.san,
+            "损失理智": r.loss, "当前理智": c.san, "疯狂状态": event.state_after.value,
         }
         if r.needs_temporary_check:
             out["提示"] = "单次损失 ≥5 点，需进行 INT 检定判定临时性疯狂"
@@ -127,18 +142,88 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
             "SAN": f"{c.san}/{c.san_max}", "LUCK": c.luck,
         }
 
-    def _search_rules(query: str, type: str = "", top_k: int = 5) -> dict:
-        from ..retrieval import _default_index, search_rules as _sr
+    def _add_player(name: str, age: int = 30) -> dict:
+        if name in session.players:
+            raise ValueError(f"玩家已存在: {name}")
+        sheet = create_character(name=name, age=age, rng=rng)
+        session.add_player(sheet)
+        return {"message": f"已加入调查员「{name}」", "character": sheet.to_dict()}
 
-        # 复用进程内缓存索引，避免重复构建
-        idx = _default_index()
-        hits = _sr(query, top_k=top_k, type=type or None, index=idx)
-        if not hits:
-            return {"message": "未找到相关规则", "query": query}
+    def _set_skill(skill: str, value: int, player_name: str | None = None) -> dict:
+        sheet = session.get_player(player_name)
+        value = _clamp(int(value), 0, 100)
+        sheet.skills[str(skill).strip()] = value
+        return {"调查员": sheet.name, "技能": str(skill).strip(), "数值": value}
+
+    def _team_luck_check() -> dict:
+        return {"团队幸运检定": session.team_luck_check(rng=rng)}
+
+    def _search_rules(query: str, limit: int = 3, type: str | None = None) -> dict:
+        try:
+            hits = search_rules(
+                query, top_k=max(1, min(int(limit), 10)), type=type, index=rule_index,
+            )
+        except FileNotFoundError as exc:
+            return {"query": query, "hits": [], "message": str(exc)}
         return {
-            "query": query, "type_filter": type or None, "count": len(hits),
-            "hits": [h.to_dict() for h in hits],
+            "query": query,
+            "hits": [hit.to_dict() for hit in hits],
+            "message": "未加载规则书或未命中" if not hits else f"命中 {len(hits)} 条规则",
         }
+
+    def _module_status() -> dict:
+        if session.module is None:
+            return {"loaded": False, "message": "当前未加载模组"}
+        return {"loaded": True, **session.module.status(player_safe=False)}
+
+    def _search_module(query: str = "", limit: int = 3) -> dict:
+        if session.module is None:
+            raise ValueError("当前未加载模组")
+        return session.module.keeper_context(query, limit=max(1, min(int(limit), 5)))
+
+    def _advance_module(
+        reason: str,
+        completed_objectives: list[str] | None = None,
+        next_node_id: str | None = None,
+    ) -> dict:
+        if session.module is None:
+            raise ValueError("当前未加载模组")
+        result = session.module.advance(reason, completed_objectives, next_node_id)
+        session.log("推进模组场景", reason=reason, scene=result["scene"])
+        return result
+
+    def _combat_attack(
+        skill: str,
+        target_name: str,
+        target_hp: int,
+        target_hp_max: int,
+        damage: str,
+        target_armor: int = 0,
+        weapon_name: str = "武器",
+        difficulty: str = "regular",
+    ) -> dict:
+        label, value = resolve_value(session, skill)
+        c = session.investigator
+        attacker = Combatant(c.name, c.hp, c.hp_max, c.attributes.DEX, db=c.db, build=c.build)
+        defender = Combatant(target_name, int(target_hp), int(target_hp_max), armor=int(target_armor))
+        result = resolve_attack(
+            attacker, defender, value, Weapon(weapon_name, damage, label),
+            difficulty=_DIFF.get(difficulty, Difficulty.REGULAR), rng=rng,
+        )
+        payload = {
+            "命中": result.hit,
+            "攻击检定": result.attack.roll,
+            "攻击结果": result.attack.degree_name,
+            "目标": target_name,
+        }
+        if result.damage:
+            payload.update({
+                "原始伤害": result.damage.rolled, "护甲": result.damage.armor,
+                "实际伤害": result.damage.damage, "目标HP": result.damage.hp_after,
+                "重伤": result.damage.major_wound, "失去意识": result.damage.unconscious,
+                "濒死": result.damage.dead,
+            })
+        return payload
 
     handlers = {
         "create_character": _create_character,
@@ -148,7 +233,14 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
         "luck_check": _luck_check,
         "sanity_check": _sanity_check,
         "update_character": _update_character,
+        "add_player": _add_player,
+        "set_skill": _set_skill,
+        "team_luck_check": _team_luck_check,
         "search_rules": _search_rules,
+        "module_status": _module_status,
+        "search_module": _search_module,
+        "advance_module": _advance_module,
+        "combat_attack": _combat_attack,
     }
 
     def dispatch(name: str, arguments: Any) -> dict:
@@ -156,10 +248,14 @@ def make_dispatcher(session: Session) -> Callable[[str, Any], dict]:
             return {"error": f"未知工具: {name!r}"}
         try:
             args = json.loads(arguments) if isinstance(arguments, str) else arguments
-            args = args or {}
+            if args is None:
+                args = {}
             if not isinstance(args, dict):
                 return {"error": "工具参数必须是 JSON 对象"}
-            return handlers[name](**args)
+            result = handlers[name](**args)
+            if tracer is not None:
+                tracer.record_tool(name, args, result)
+            return result
         except Exception as e:  # noqa: BLE001 —— 任何错误都反馈给模型，便于其纠正
             return {"error": f"工具调用失败: {type(e).__name__}: {e}"}
 
@@ -269,17 +365,119 @@ TOOLS_SCHEMA: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "search_rules",
-            "description": "检索规则书（CoC 7th），返回相关规则块及其页号。玩家不确定规则/判定依据时使用。",
+            "name": "add_player",
+            "description": "向当前战役加入一名调查员。多人跑团开场时使用。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "查询内容，如 奖励骰/闪避/理智检定/食尸鬼"},
-                    "type": {"type": "string", "enum": ["rule", "skill", "combat", "monster", "spell", "tome", "table", "glossary"],
-                               "description": "（可选）限定实体类型，不传则全库检索"},
-                    "top_k": {"type": "integer", "description": "返回条数，默认5"},
+                    "name": {"type": "string", "description": "调查员姓名"},
+                    "age": {"type": "integer", "description": "年龄，默认30"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_skill",
+            "description": "设置指定调查员的技能值，用于建卡或技能成长。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill": {"type": "string", "description": "技能名称"},
+                    "value": {"type": "integer", "description": "新的技能值，0到100"},
+                    "player_name": {"type": "string", "description": "调查员姓名；省略为主调查员"},
+                },
+                "required": ["skill", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "team_luck_check",
+            "description": "对队伍中所有调查员分别进行幸运检定。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_rules",
+            "description": "检索 CoC 7th 规则书并返回带页码的原文。对规则不确定时必须使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "规则问题或关键词"},
+                    "limit": {"type": "integer", "description": "最多返回条数，默认3"},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "module_status",
+            "description": "查看当前模组和当前场景的 Keeper 专用进度，不向玩家展示返回原文。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_module",
+            "description": "只检索当前场景的模组原文。未来场景不会被返回；不得向玩家逐字复述 Keeper 资料。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "当前行动涉及的人物、地点或线索"},
+                    "limit": {"type": "integer", "description": "最多返回片段数，默认3"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "advance_module",
+            "description": "当前场景目标完成后，依据玩家行动沿剧情图推进。不得选择当前不可用的分支。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "玩家已完成的、足以推进场景的游戏内事件"},
+                    "completed_objectives": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "已完成目标，必须与当前场景清单逐项一致",
+                    },
+                    "next_node_id": {
+                        "type": "string",
+                        "description": "存在多个剧情分支时，从 search_module 的 available_branches 选择目标节点 ID",
+                    },
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "combat_attack",
+            "description": "执行一次攻击检定并结算武器伤害、护甲、重伤和失去意识。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill": {"type": "string", "description": "使用的战斗技能"},
+                    "target_name": {"type": "string", "description": "目标名称"},
+                    "target_hp": {"type": "integer", "description": "目标当前HP"},
+                    "target_hp_max": {"type": "integer", "description": "目标最大HP"},
+                    "damage": {"type": "string", "description": "武器伤害表达式，如1d6"},
+                    "target_armor": {"type": "integer", "description": "目标护甲"},
+                    "weapon_name": {"type": "string", "description": "武器名称"},
+                    "difficulty": {"type": "string", "enum": ["regular", "hard", "extreme"]},
+                },
+                "required": ["skill", "target_name", "target_hp", "target_hp_max", "damage"],
             },
         },
     },

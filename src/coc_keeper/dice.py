@@ -74,6 +74,22 @@ def _to_halfwidth(expr: str) -> str:
     return expr.translate(str.maketrans(full, half_))
 
 
+def _parse_terms(expr: str) -> list[str]:
+    normalized = _to_halfwidth(expr).replace(" ", "").replace("\u3000", "").lower()
+    if not normalized:
+        raise ValueError("骰表达式为空")
+    if not re.fullmatch(r"[+-]?\d+(?:d\d+)?(?:[+-]\d+(?:d\d+)?)*", normalized):
+        raise ValueError(f"无法解析骰表达式: {expr!r}")
+    terms = re.findall(r"[+-]?\d+d\d+|[+-]?\d+", normalized)
+    for term in terms:
+        raw = term.lstrip("+-")
+        if "d" in raw:
+            count, sides = map(int, raw.split("d"))
+            if not 1 <= count <= 1000 or not 1 <= sides <= 100000:
+                raise ValueError("骰子数量必须为 1..1000，面数必须为 1..100000")
+    return terms
+
+
 def d(sides: int, rng: Optional[random.Random] = None) -> int:
     """掷一个 sides 面骰，返回 1..sides。"""
     rng = rng or random
@@ -91,13 +107,8 @@ def roll_dice(expr: str, rng: Optional[random.Random] = None) -> int:
         "0" / "1"   -> 常数（用于理智损失 "0/1D6" 中的 0）
     """
     rng = rng or random
-    expr = _to_halfwidth(expr).replace(" ", "").replace("\u3000", "")
-    if not expr:
-        raise ValueError("骰表达式为空")
     total = 0
-    matched = False
-    for tok in re.findall(r"[+-]?\d+d\d+|[+-]?\d+", expr):
-        matched = True
+    for tok in _parse_terms(expr):
         sign = 1
         if tok[0] in "+-":
             if tok[0] == "-":
@@ -109,16 +120,13 @@ def roll_dice(expr: str, rng: Optional[random.Random] = None) -> int:
             total += sign * sum(rng.randint(1, int(s)) for _ in range(n))
         else:
             total += sign * int(tok)
-    if not matched:
-        raise ValueError(f"无法解析骰表达式: {expr!r}")
     return total
 
 
 def max_roll(expr: str) -> int:
     """计算骰表达式可能的最大值，例如 1d6+1 -> 7，1d100 -> 100。"""
-    expr = _to_halfwidth(expr).replace(" ", "").replace("\u3000", "")
     total = 0
-    for tok in re.findall(r"[+-]?\d+d\d+|[+-]?\d+", expr):
+    for tok in _parse_terms(expr):
         sign = 1
         if tok[0] in "+-":
             if tok[0] == "-":
@@ -127,7 +135,7 @@ def max_roll(expr: str) -> int:
         if "d" in tok.lower():
             n, s = tok.lower().split("d")
             n = int(n) if n else 1
-            total += sign * n * int(s)
+            total += n * int(s) if sign > 0 else -n
         else:
             total += sign * int(tok)
     return total

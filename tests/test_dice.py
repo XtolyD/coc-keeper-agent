@@ -42,6 +42,16 @@ def test_max_roll():
     assert max_roll("2d10+1") == 21
     assert max_roll("1d100") == 100
     assert max_roll("0") == 0
+    assert max_roll("1d6-1d4") == 5
+
+
+def test_roll_dice_rejects_invalid_or_unbounded():
+    import pytest
+
+    with pytest.raises(ValueError):
+        roll_dice("1d6oops")
+    with pytest.raises(ValueError):
+        roll_dice("1001d6")
 
 
 def test_d100_range():
