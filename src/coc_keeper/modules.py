@@ -10,7 +10,7 @@ from typing import Any
 
 import pymupdf
 
-from .rules.retrieval import RuleIndex
+from .retrieval import Index, search
 
 
 def _string_list(value: Any) -> list[str]:
@@ -289,6 +289,32 @@ class StoryGraph:
             nodes=[StoryNode.from_dict(item) for item in data.get("nodes", [])],
             edges=[StoryEdge.from_dict(item) for item in data.get("edges", [])],
         )
+
+
+def _text_to_chunks(text: str, default_page: int) -> list[dict]:
+    """把场景原文按 MinerU 页标记切成可检索块（零外部服务）。"""
+    pattern = re.compile(r"=====\s*第\s*(\d+)\s*页\s*=====")
+    matches = list(pattern.finditer(text))
+    chunks: list[dict] = []
+    if not matches:
+        body = text.strip()
+        return [{
+            "name": "", "text": body, "page": default_page,
+            "start_page": default_page, "end_page": default_page,
+            "path": "", "lines": body.splitlines(),
+        }] if body else []
+    for index, match in enumerate(matches):
+        page = int(match.group(1))
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        body = text[match.end():end].strip()
+        if not body:
+            continue
+        chunks.append({
+            "name": "", "text": body, "page": page,
+            "start_page": page, "end_page": page,
+            "path": "", "lines": body.splitlines(),
+        })
+    return chunks
 
 
 @dataclass
@@ -723,10 +749,13 @@ class ModuleRuntime:
     def keeper_context(self, query: str = "", *, limit: int = 3, max_chars: int = 8000) -> dict[str, Any]:
         scene = self.current
         text = self.module.scene_text(scene)
-        chunks = RuleIndex.from_text(text).search(query, limit=limit) if query.strip() and text else []
+        hits = []
+        if query.strip() and text:
+            chunks = _text_to_chunks(text, scene.page_start)
+            hits = search(Index.build(chunks), query, top_k=limit)
         excerpts = [
             {"page": hit.page, "text": hit.text[:2000], "score": round(hit.score, 4)}
-            for hit in chunks
+            for hit in hits
         ]
         if not excerpts and text:
             excerpts = [{"page": scene.page_start, "text": text[:max_chars], "score": 0.0}]

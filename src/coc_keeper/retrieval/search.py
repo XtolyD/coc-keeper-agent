@@ -39,6 +39,7 @@ class RuleHit:
     score: float
     keywords: list[str]
     fields: dict[str, float]
+    text: str = ""              # 完整块正文（供模组场景上下文；to_dict 不输出）
 
     def to_dict(self) -> dict:
         return {
@@ -114,6 +115,7 @@ def search(
             score=score,
             keywords=keywords,
             fields={"name": round(s_name, 4), "text": round(s_text, 4)},
+            text=chunk.get("text", ""),
         ))
 
     hits.sort(key=lambda h: h.score, reverse=True)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent.state import Session
-from .rules.retrieval import RuleChunk, RuleIndex
+from .retrieval import Index, search
 
 
 def _now() -> str:
@@ -65,10 +65,14 @@ class GameRecord:
         if not query.strip() or not self.transcript:
             return []
         chunks = [
-            RuleChunk(index + 1, f"{entry.role}: {entry.content}")
+            {
+                "name": "", "text": f"{entry.role}: {entry.content}",
+                "page": index + 1, "start_page": index + 1, "end_page": index + 1,
+                "path": "", "lines": [f"{entry.role}: {entry.content}"],
+            }
             for index, entry in enumerate(self.transcript[:-8])
         ]
-        return [hit.text for hit in RuleIndex(chunks).search(query, limit=limit)]
+        return [hit.text for hit in search(Index.build(chunks), query, top_k=limit)]
 
 
 class GameStore:

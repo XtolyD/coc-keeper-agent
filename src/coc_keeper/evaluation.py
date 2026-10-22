@@ -10,7 +10,7 @@ from typing import Callable, Iterable
 from .dice import Difficulty, d100
 from .rules.checks import indefinite_insanity_triggered, skill_check
 from .rules.combat import Combatant, Weapon, resolve_attack
-from .rules.retrieval import RuleIndex
+from .retrieval import Index, search
 
 
 @dataclass(frozen=True)
@@ -130,8 +130,11 @@ def default_rule_suite(seed: int = 1920) -> EvaluationSuite:
         return 0 <= target.hp <= 12 and (not result.hit or result.damage is not None)
 
     def retrieval_has_citation() -> bool:
-        index = RuleIndex.from_text("===== 第 70 页 =====\n奖励骰需要额外掷一个十位骰，取较小结果。")
-        hits = index.search("奖励骰")
+        index = Index.build([{
+            "name": "", "text": "奖励骰需要额外掷一个十位骰，取较小结果。",
+            "page": 70, "start_page": 70, "end_page": 70, "path": "", "lines": [],
+        }])
+        hits = search(index, "奖励骰")
         return bool(hits and hits[0].page == 70)
 
     return EvaluationSuite([
