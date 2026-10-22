@@ -152,4 +152,4 @@ class MinerUClient:
   纯函数（Block 解析、state 判定）可单测、可复现。
 - 密钥不打印；无硬编码 base_url/key。
 
-> 「任意 PDF」指：spec 不绑定特定模组名，验收以上传的真实模组/规则书为准（见 `data/models/`）。
+> 「任意 PDF」指：spec 不绑定特定模组名，验收以上传的真实模组/规则书为准（见 `data/modules/` 或 `data/rulebook/`）。

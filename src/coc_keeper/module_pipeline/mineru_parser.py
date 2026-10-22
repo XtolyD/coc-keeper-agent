@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +30,8 @@ class CachedMinerUDocumentParser:
             cached = self._load_cache(cache_dir, pdf_path)
             if cached is not None:
                 return cached
+        if refresh:
+            shutil.rmtree(cache_dir, ignore_errors=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
         result = self.client.parse_pdf(str(pdf_path), out_dir=str(cache_dir))
         self._write_meta(cache_dir, result, key)
@@ -45,12 +48,20 @@ class CachedMinerUDocumentParser:
         if not candidates:
             return None
         content_path = candidates[0]
+        meta_path = cache_dir / "meta.json"
+        if not meta_path.exists():
+            return None
         try:
             blocks = parse_content_list(json.loads(content_path.read_text(encoding="utf-8")))
         except (ValueError, TypeError, OSError):
             return None
+        if not blocks:
+            return None
         full_md = cache_dir / "full.md"
-        meta_path = cache_dir / "meta.json"
+        try:
+            markdown = full_md.read_text(encoding="utf-8") if full_md.exists() else ""
+        except (OSError, UnicodeDecodeError):
+            return None
         parsed_at = ""
         if meta_path.exists():
             try:
@@ -60,7 +71,7 @@ class CachedMinerUDocumentParser:
         return ParseResult(
             source_pdf=str(pdf_path),
             blocks=blocks,
-            markdown=full_md.read_text(encoding="utf-8") if full_md.exists() else "",
+            markdown=markdown,
             images_dir=str(cache_dir / "images"),
             content_list_path=str(content_path),
             parsed_at=parsed_at or datetime.now().isoformat(timespec="seconds"),

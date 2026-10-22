@@ -39,13 +39,10 @@ def build_source_chunks(
 
     def flush() -> None:
         nonlocal current_start, current_end, current_blocks, current_images
-        if current_start is None or not current_blocks:
-            current_start = current_end = None
-            current_blocks = []
-            current_images = []
+        if current_start is None:
             return
         body = "\n".join(current_blocks).strip()
-        if body:
+        if body or current_images:
             chunks.append(ModuleSourceChunk(
                 id=f"source-{len(chunks) + 1:03d}",
                 heading=current_heading,
@@ -66,10 +63,22 @@ def build_source_chunks(
         page = int(block.page_idx) + 1
         text = _block_text(block)
         if block.type == "image":
+            if (
+                current_start is not None
+                and page > (current_end or current_start)
+                and page - current_start + 1 > max_pages
+            ):
+                heading = current_heading
+                flush()
+                current_heading = heading
             if block.img_path:
                 current_images.append(block.img_path)
             if current_start is None:
                 current_start = current_end = page
+                if current_heading == "正文":
+                    current_heading = f"图片页 {page}"
+            else:
+                current_end = max(current_end or page, page)
             continue
         if not text:
             continue

@@ -67,6 +67,9 @@ class ModuleApplicationService:
         reparse: bool = False,
         review: bool = True,
     ) -> str:
+        settings = Settings()
+        if not settings.is_configured:
+            raise RuntimeError("未配置 DeepSeek API，无法重新分析模组")
         record = self.store.get(module_id)
         source = self.store.source_pdf_path(module_id)
         if source is None:
@@ -136,6 +139,7 @@ class ModuleApplicationService:
             api_key=settings.mineru_api_key,
             base_url=settings.mineru_base_url,
             poll_interval=settings.mineru_poll_interval,
+            timeout=settings.mineru_timeout,
         )
         cache_root = Path(settings.mineru_cache_dir) if settings.mineru_cache_dir else self.data_root / "mineru"
         parser = CachedMinerUDocumentParser(client, cache_root)

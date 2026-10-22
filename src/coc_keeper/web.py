@@ -141,7 +141,7 @@ class AppContext:
         return payload
 
 
-app = FastAPI(title="CoC Keeper", version="2.1.0")
+app = FastAPI(title="CoC Keeper", version="2.2.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -308,11 +308,22 @@ def update_module(module_id: str, request: ModuleUpdateRequest):
 def analyze_module(module_id: str, reparse: bool = False, review: bool = True):
     context = get_context()
     settings = Settings()
+    if not settings.is_configured:
+        raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API，无法重新分析模组")
     if (reparse or review) and not settings.mineru_api_key:
         raise HTTPException(status_code=503, detail="尚未配置 MINERU_API_KEY，无法解析 PDF")
     context.modules.get(module_id)
     if context.modules.source_pdf_path(module_id) is None:
         raise HTTPException(status_code=409, detail="该模组未保留原始 PDF，请删除后重新导入")
+    running_job_id = context.module_jobs.get(module_id)
+    if running_job_id:
+        try:
+            running = context.jobs.get(running_job_id)
+            if running["status"] == "running":
+                running["module_id"] = module_id
+                return running
+        except FileNotFoundError:
+            pass
     job_id = context.module_service.reanalyze(module_id, reparse=reparse, review=review)
     context.module_jobs[module_id] = job_id
     payload = context.jobs.get(job_id)

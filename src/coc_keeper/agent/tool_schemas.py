@@ -150,6 +150,8 @@ TOOLS_SCHEMA: list[dict] = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "规则问题或关键词"},
+                    "type": {"type": "string", "enum": ["rule", "skill", "combat", "monster", "spell", "tome", "table", "glossary"],
+                             "description": "（可选）限定实体类型，不传则全库检索"},
                     "limit": {"type": "integer", "description": "最多返回条数，默认3"},
                 },
                 "required": ["query"],

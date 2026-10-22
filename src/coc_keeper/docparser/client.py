@@ -46,6 +46,7 @@ class MinerUClient:
         base_url: Optional[str] = None,
         session: Optional[object] = None,
         poll_interval: float = POLL_INTERVAL,
+        timeout: float = POLL_TIMEOUT,
     ):
         s = Settings()
         self.api_key = api_key if api_key is not None else s.mineru_api_key
@@ -53,6 +54,7 @@ class MinerUClient:
         self.session = session
         self._own_session = session is None
         self.poll_interval = poll_interval
+        self.timeout = timeout
 
     def _get_session(self):
         if self._own_session and self.session is None:
@@ -136,7 +138,7 @@ class MinerUClient:
 
     def _poll_batch(self, batch_id: str) -> dict:
         """GET /extract-results/batch/{id}，轮询到 done/failed。"""
-        deadline = time.monotonic() + POLL_TIMEOUT
+        deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
             resp = self._get(f"/api/v4/extract-results/batch/{batch_id}")
             extract_list = (resp.get("data") or {}).get("extract_result") or []
@@ -167,24 +169,24 @@ class MinerUClient:
         markdown = ""
         blocks = []
         content_list_path = ""
-        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
-        for name in zf.namelist():
-            base = Path(name).name
-            if name.endswith("_content_list.json") and "v2" not in name:
-                raw = zf.read(name)
-                (tmp_dir / base).write_bytes(raw)
-                content_list_path = str(tmp_dir / base)
-                try:
-                    blocks = parse_content_list(json.loads(raw.decode("utf-8")))
-                except (ValueError, TypeError):
-                    pass
-            elif base == "full.md":
-                markdown = zf.read(name).decode("utf-8")
-                (tmp_dir / base).write_bytes(markdown.encode("utf-8"))
-            elif "/images/" in name or name.startswith("images/"):
-                p = tmp_dir / "images" / Path(name).name
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(zf.read(name))
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for name in zf.namelist():
+                base = Path(name).name
+                if name.endswith("_content_list.json") and "v2" not in name:
+                    raw = zf.read(name)
+                    (tmp_dir / base).write_bytes(raw)
+                    content_list_path = str(tmp_dir / base)
+                    try:
+                        blocks = parse_content_list(json.loads(raw.decode("utf-8")))
+                    except (ValueError, TypeError):
+                        pass
+                elif base == "full.md":
+                    markdown = zf.read(name).decode("utf-8")
+                    (tmp_dir / base).write_bytes(markdown.encode("utf-8"))
+                elif "/images/" in name or name.startswith("images/"):
+                    p = tmp_dir / "images" / Path(name).name
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(zf.read(name))
 
         if not blocks and not markdown:
             raise DocParserError("结果 zip 无 content_list / full.md")

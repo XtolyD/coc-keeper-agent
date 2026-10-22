@@ -164,7 +164,7 @@ def test_web_reanalyze_uses_background_job(tmp_path, monkeypatch):
             return context.jobs.submit("module-reanalyze", run)
 
     context.module_service = StubService()
-    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(mineru_api_key="mineru-key"))
+    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(mineru_api_key="mineru-key", is_configured=True))
     response = client.post(f"/api/modules/{record.id}/analyze?reparse=true")
     assert response.status_code == 202
     for _ in range(200):

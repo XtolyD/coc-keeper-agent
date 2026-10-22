@@ -163,3 +163,41 @@ def test_cached_parser_reuses_mineru_result(tmp_path):
     assert client.calls == 1
     assert first.blocks[0].text == "第一章"
     assert second.blocks[0].text == "缓存正文"
+
+
+def test_ingest_keeps_image_only_page_as_chunk():
+    parsed = _parsed(blocks=[
+        Block("image", "", "", 0, img_path="images/map.jpg"),
+        Block("text", "第二章", "1", 1),
+        Block("text", "正文。", "", 1),
+    ])
+    chunks = build_source_chunks(parsed)
+    assert chunks[0].image_paths == ["images/map.jpg"]
+    assert chunks[0].page_start == 1
+    assert chunks[0].heading == "图片页 1"
+
+
+def test_ingest_does_not_attach_late_image_to_previous_page_chunk():
+    parsed = _parsed(blocks=[
+        Block("text", "第一章", "1", 0),
+        Block("text", "第一页正文。", "", 0),
+        Block("image", "", "", 2, img_path="images/late.jpg"),
+    ])
+    chunks = build_source_chunks(parsed, max_pages_per_section=1)
+    assert len(chunks) == 2
+    assert chunks[0].page_end == 1
+    assert chunks[1].page_start == 3
+    assert chunks[1].image_paths == ["images/late.jpg"]
+
+
+def test_assembler_tolerates_malformed_visual_entities():
+    parsed = _parsed()
+    chunks = build_source_chunks(parsed)
+    review = ReviewOutcome(chunks=chunks, visual_entities=[
+        {"type": "character", "name": "医生", "attributes": "not-a-dict", "page": "封面"},
+        {"type": "map", "locations": "not-a-list", "page": 2},
+    ])
+    module = ModuleAssembler().build(parsed, chunks, review, title="容错模组")
+    assert module.title == "容错模组"
+    assert any(actor.name == "医生" for actor in module.actors)
+    assert module.analysis["visual_entities"]

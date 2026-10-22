@@ -18,6 +18,7 @@ from ..rules.checks import (
 from ..rules.combat import Combatant, Weapon, resolve_attack
 from ..retrieval import Index, search_rules
 from .state import Session
+from .tool_schemas import TOOLS_SCHEMA
 
 _DIFF = {
     "regular": Difficulty.REGULAR,
@@ -260,7 +261,3 @@ def make_dispatcher(
             return {"error": f"工具调用失败: {type(e).__name__}: {e}"}
 
     return dispatch
-
-
-#: OpenAI function calling 的工具定义（schema）
-from .tool_schemas import TOOLS_SCHEMA

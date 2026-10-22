@@ -66,6 +66,9 @@ class LLMModuleReviewer:
                 if not text:
                     warnings.append(f"{chunk.id} 复核结果为空，保留 MinerU 原文")
                     continue
+                raw_issues = (item or {}).get("issues") or []
+                if not isinstance(raw_issues, list):
+                    raw_issues = [str(raw_issues)]
                 corrected[chunk.id] = ModuleSourceChunk(
                     id=chunk.id,
                     heading=chunk.heading,
@@ -77,7 +80,7 @@ class LLMModuleReviewer:
                     image_paths=list(chunk.image_paths),
                     review={
                         "model": getattr(self.vision, "model", "deepseek"),
-                        "issues": list((item or {}).get("issues", [])),
+                        "issues": [str(issue) for issue in raw_issues],
                         "confidence": str((item or {}).get("confidence", "")),
                     },
                 )
@@ -126,15 +129,20 @@ class LLMModuleReviewer:
     def _image_paths(self, chunks: list[ModuleSourceChunk], parsed: ParseResult) -> list[str]:
         if not parsed.images_dir:
             return []
-        start = min(chunk.page_start for chunk in chunks)
-        end = max(chunk.page_end for chunk in chunks)
+        candidates: list[str] = []
+        for chunk in chunks:
+            candidates.extend(chunk.image_paths)
+        if not candidates:
+            # 兼容手工构造的 chunk：按页范围从 ParseResult 回查图片。
+            start = min(chunk.page_start for chunk in chunks)
+            end = max(chunk.page_end for chunk in chunks)
+            candidates.extend(
+                block.img_path for block in parsed.blocks
+                if block.type == "image" and block.img_path and start <= int(block.page_idx) + 1 <= end
+            )
         paths: list[str] = []
-        for block in parsed.blocks:
-            if block.type != "image" or not block.img_path:
-                continue
-            page = int(block.page_idx) + 1
-            if start <= page <= end:
-                path = Path(parsed.images_dir) / Path(block.img_path).name
-                if path.exists():
-                    paths.append(str(path))
+        for raw in candidates:
+            path = Path(parsed.images_dir) / Path(raw).name
+            if path.exists() and str(path) not in paths:
+                paths.append(str(path))
         return paths[: self.max_images_per_batch]

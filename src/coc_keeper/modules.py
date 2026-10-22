@@ -354,11 +354,6 @@ class KeeperModule:
         self._validate_references()
         self.version = 2
 
-    @property
-    def sections(self) -> list[ModuleScene]:
-        """Compatibility alias. New JSON uses ``scenes`` and separate ``source_chunks``."""
-        return self.scenes
-
     @staticmethod
     def _summarize(text: str, *, fallback: str) -> str:
         cleaned = re.sub(r"=====\s*第\s*\d+\s*页\s*=====", "", str(text))

@@ -14,6 +14,14 @@ from .ports import ReviewOutcome
 from .stat_extractor import extract_stat_blocks, infer_title, merge_local_actors
 
 
+def _page_number(value: object) -> int:
+    try:
+        page = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    return page if page > 0 else 0
+
+
 class ModuleAssembler:
     """无状态组装器：source chunks → v2 模组结构。"""
 
@@ -90,9 +98,16 @@ class ModuleAssembler:
         review: ReviewOutcome | None,
     ) -> list[ModuleActor]:
         raw_sets = [extract_stat_blocks(page_texts)]
-        reviewed_text = [chunk.text for chunk in chunks if chunk.text]
-        if reviewed_text:
-            raw_sets.append(extract_stat_blocks(["\n".join(reviewed_text)]))
+        max_page = max((chunk.page_end for chunk in chunks), default=0)
+        reviewed_pages = [""] * max_page
+        for chunk in chunks:
+            if not chunk.text:
+                continue
+            index = max(0, chunk.page_start - 1)
+            if index < len(reviewed_pages):
+                reviewed_pages[index] = "\n".join(filter(None, [reviewed_pages[index], chunk.text]))
+        if any(reviewed_pages):
+            raw_sets.append(extract_stat_blocks(reviewed_pages))
         return merge_local_actors(raw_sets)
 
     @staticmethod
@@ -106,6 +121,8 @@ class ModuleAssembler:
         by_name = {actor.name.strip().lower(): actor for actor in actors}
         known_locations = {location.name.strip().lower(): location for location in locations}
         for item in review.visual_entities:
+            if not isinstance(item, dict):
+                continue
             kind = str(item.get("type", "")).lower()
             if kind == "character":
                 name = str(item.get("name", "")).strip()
@@ -116,26 +133,33 @@ class ModuleAssembler:
                     actor = ModuleActor(id=f"actor-{len(actors) + 1:03d}", name=name)
                     actors.append(actor)
                     by_name[name.lower()] = actor
-                actor.attributes.update({
-                    str(key).upper(): value for key, value in dict(item.get("attributes", {})).items()
-                })
-                actor.skills.update({
-                    str(key): value for key, value in dict(item.get("skills", {})).items()
-                })
+                attributes = item.get("attributes")
+                if isinstance(attributes, dict):
+                    actor.attributes.update({
+                        str(key).upper(): value for key, value in attributes.items()
+                    })
+                skills = item.get("skills")
+                if isinstance(skills, dict):
+                    actor.skills.update({str(key): value for key, value in skills.items()})
                 if item.get("description"):
                     actor.description = str(item["description"])
-                if item.get("page"):
-                    actor.source_pages = sorted(set(actor.source_pages + [int(item["page"])]))
+                page = _page_number(item.get("page"))
+                if page:
+                    actor.source_pages = sorted(set(actor.source_pages + [page]))
             elif kind == "map":
-                for raw_name in item.get("locations", []) or []:
+                raw_names = item.get("locations")
+                if not isinstance(raw_names, list):
+                    continue
+                for raw_name in raw_names:
                     name = str(raw_name).strip()
                     if not name or name.lower() in known_locations:
                         continue
+                    page = _page_number(item.get("page"))
                     location = ModuleLocation(
                         id=f"location-{len(locations) + 1:03d}",
                         name=name,
                         description=str(item.get("description", "")),
-                        source_pages=[int(item["page"])] if item.get("page") else [],
+                        source_pages=[page] if page else [],
                     )
                     locations.append(location)
                     known_locations[name.lower()] = location
