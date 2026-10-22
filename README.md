@@ -31,45 +31,56 @@ coc-keeper-agent/
 ├── requirements.txt          # 依赖（按里程碑注释）
 ├── conftest.py               # pytest：src 导入路径 + 脚本化 RNG
 ├── docs/
-│   ├── design.md             # 架构设计
+│   ├── design.md             # 架构设计（含局部 OOP 边界）
 │   ├── learning-plan.md      # 学习路线与里程碑
-│   └── retrieval-spec.md     # 规则检索规范（BM25/分词/字段加权/接口）
+│   ├── learning-guide.md     # 按代码阅读的具体学习建议
+│   ├── docparser-spec.md     # MinerU 解析规范
+│   ├── segments-spec.md      # 语义分块规范
+│   ├── retrieval-spec.md     # BM25 检索规范
+│   └── module-spec.md        # 模组导入规范（MinerU + DeepSeek 复核）
 ├── scripts/
-│   ├── extract_rules.py      # 规则书：梳理 + 清洗 + 实体分块 + 二次存储
-│   ├── verify_rulebook.py    # 清洗层完整性校验（无正文丢失）
-│   ├── verify_chunks.py      # 实体分块逐页验证报告
-│   └── smoke_llm.py          # LLM 连通性 / 工具调用冒烟测试
+│   ├── extract_rules_mineru.py # 规则书 MinerU 抽取/分块
+│   ├── smoke_llm.py          # LLM 连通性 / 工具调用冒烟测试
+│   └── run_evals.py          # 固定种子离线评估
 ├── data/
-│   └── rulebook/             # 规则原文 + 生成的结构/分页/实体块语料（gitignored，可再生成）
-│       ├── rules_structure.json   # 按 TOC 分层（章/节/小节）+ 页区间 + 清洗后正文
-│       ├── rules_pages/           # 每页一份的清洗后文本
-│       ├── rules_chunks.json      # 按「内容实体」切分的规则块（怪物/技能/法术/规则）
-│       └── chunk_verify_report.txt # 全书逐页分块验证报告
+│   ├── rulebook/             # 规则全文与 rules_chunks.json（gitignored）
+│   ├── mineru/               # MinerU 解析缓存（gitignored）
+│   ├── characters/           # 永久角色卡，与模组/战役解耦
+│   ├── modules/              # 导入后的 Keeper 私密模组
+│   └── campaigns/            # 战役状态与完整对话记录
 ├── src/coc_keeper/
-│   ├── __init__.py
-│   ├── rulebook.py           # 规则书结构化抽取（双栏重排 + 噪声清洗 + TOC 分层）
-│   ├── chunker.py            # 实体识别判据（怪物/邪神/技能名等）
-│   ├── build_chunks.py       # 实体分块编排器（页内切分 + 跨页合并 + 表格区识别）
-│   ├── merge_fragments.py    # 残块回合并（消除双栏断句孤立碎片）
-│   ├── config.py             # 配置：从 .env 读取模型与运行参数
-│   ├── cli.py                # 交互式跑团入口（python -m coc_keeper.cli）
-│   ├── dice.py               # 骰子机制：d100、奖励/惩罚骰、成功度、难度
-│   ├── character.py          # 角色卡：属性、衍生属性、技能、建卡
-│   ├── rules/
-│   │   └── checks.py         # 检定：技能/对抗/幸运/理智
-│   ├── retrieval/            # 规则检索（M2）：字级 BM25 + 字段加权
-│   │   ├── tokenizer.py      #   字级分词 + 全角归一
-│   │   ├── bm25.py           #   自实现 BM25（纯函数）
-│   │   ├── index.py          #   由 rules_chunks.json 构建索引
-│   │   └── search.py         #   search_rules 查询接口（可解释命中）
-│   └── agent/                # KP Agent（M3）
+│   ├── config.py             # 配置：DeepSeek + MinerU
+│   ├── cli.py                # 交互式跑团入口
+│   ├── dice.py               # 骰子机制
+│   ├── character.py          # 角色卡
+│   ├── occupations.py        # 229 个职业
+│   ├── character_store.py    # 永久角色卡存储
+│   ├── module_store.py       # 模组库
+│   ├── game_store.py         # 战役与旧回合检索
+│   ├── storage.py            # 通用 JSON 记录仓储
+│   ├── modules.py            # 模组 v2 领域模型与运行时
+│   ├── module_pipeline/      # MinerU 解析 → DeepSeek 复核 → 结构分析
+│   ├── module_analysis.py    # DeepSeek 分阶段语义分析
+│   ├── module_service.py     # 模组应用服务与后台任务编排
+│   ├── web.py                # FastAPI WebUI/API（含 create_app）
+│   ├── web_jobs.py           # 后台任务管理
+│   ├── docparser/            # MinerU 客户端与 ParseResult
+│   ├── segments/             # content_list → 语义块
+│   ├── retrieval/            # 字级 BM25 检索
+│   ├── vision/               # DeepSeek 视觉/复核客户端
+│   ├── rules/                # 纯函数规则引擎
+│   └── agent/
+│       ├── tool_schemas.py   #   工具 schema
+│       ├── tool_registry.py  #   工具注册表
+│       ├── tools.py          #   工具实现与 dispatcher
 │       ├── llm.py            #   OpenAI 兼容客户端
-│       ├── tools.py          #   工具 schema + 规则引擎绑定
-│       ├── memory.py         #   对话记忆（按回合裁剪）
+│       ├── memory.py         #   对话记忆
 │       ├── agent.py          #   工具调用循环
 │       ├── prompts.py        #   系统提示词
-│       └── state.py          #   会话状态
-└── tests/                    # 44 个单元测试（规则引擎 + 规则书抽取/分块逻辑）
+│       ├── state.py          #   多人状态与存档
+│       ├── security.py       #   输入边界与注入防护
+│       └── observability.py  #   tracing、token 与成本统计
+└── tests/                    # 单元/集成测试
 ```
 
 ---
@@ -81,7 +92,7 @@ coc-keeper-agent/
 ```powershell
 conda create -n coc-keeper python=3.12 pip -y
 conda activate coc-keeper
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 ## 快速开始
@@ -90,20 +101,122 @@ pip install -r requirements.txt
 conda activate coc-keeper
 cd coc-keeper-agent
 
-# 1. （一次性·离线）规则书 → 梳理 + 清洗 + 实体分块，并校验完整性
-python scripts\extract_rules.py --build      # 生成 rules_structure.json + rules_pages/ + rules_chunks.json
-python scripts\verify_rulebook.py             # 校验清洗层无正文丢失（仅删噪声）
-python scripts\verify_chunks.py               # 生成全书逐页分块验证报告
-#   打印某页清洗后文本：python scripts\extract_rules.py --pages 24
+# 1. （可选·离线）MinerU 解析规则书 → rules_chunks.json
+python scripts\extract_rules_mineru.py --write data\rulebook\rules_chunks.json
 
-# 2. 运行规则引擎测试
+# 2. 运行完整测试与离线评估
 python -m pytest -q
+python -m coc_keeper.cli --eval
 
 # 3. （M3）交互式跑团：需先在 .env 配置 DEEPSEEK_API_KEY
 python -m coc_keeper.cli
+
+# 固定随机种子并自动保存战役
+python -m coc_keeper.cli --seed 1920 --autosave saves\campaign.json
+
+# 从存档继续
+python -m coc_keeper.cli --load saves\campaign.json --autosave saves\campaign.json
+
+# 启动时加载 PDF 模组
+python -m coc_keeper.cli --module "D:\Modules\scenario.pdf" --autosave saves\scenario.json
 ```
 
-> 规则引擎核心零第三方运行时依赖；M3 Agent 需要 `openai`（已写入 requirements.txt）。
+CLI 内可使用 `/status`、`/players`、`/trace`、`/save [路径]` 和 `/help`。
+规则层、RAG、存档与离线评估不需要网络；在线 KP Agent 需要 `openai` 与 DeepSeek 密钥；
+PDF 导入/重新解析还需要 `MINERU_API_KEY`。
+
+## WebUI
+
+在 `.env` 中配置密钥后启动本地界面：
+
+```powershell
+conda activate coc-keeper
+cd coc-keeper-agent
+coc-keeper-web
+```
+
+然后打开 `http://127.0.0.1:8765`。也可以运行：
+
+```powershell
+python -m coc_keeper.web
+```
+
+WebUI 的推荐流程是：
+
+1. 在“角色卡”中生成五组完整属性并选择一组。
+2. 从参考角色卡提取的 229 个职业中选择具体职业，再完成固定、组选和任意本职技能选择。
+3. 分别分配职业点和 `INT×2` 兴趣点。职业点按职业公式计算，只能用于本职技能；默认本职/非本职
+   上限为 70/60，信用评级必须先用职业点达到该职业范围下限。
+4. 永久保存角色卡。角色卡保存在 `data/characters/`，不属于任何模组，可被多个战役重复选择。
+5. 在“模组库”中导入 PDF。原始 PDF 会保存在本地模组库；后台依次执行 MinerU 解析、
+   DeepSeek 复核、结构分析。单页/单批失败会保留 MinerU 原文并列出待校对警告。
+6. 在“检查 / 编辑”中分别校对角色与怪物、地点与场景、故事线和 PDF 原文。
+7. 在“战役”中分别选择角色卡和模组后开局。战役保存在 `data/campaigns/`，角色状态变化会同步回永久角色卡。
+
+角色卡、模组和战役是三个独立实体，库列表均提供删除入口。删除战役不会删除它引用的角色卡或模组；
+为避免留下无法同步的引用，被战役使用的角色卡和模组需先删除对应战役。模组库修改只影响之后创建的战役，
+已开始的战役使用创建时的模组快照，不会被中途改写。
+主导航可收成图标栏，战役中的调查员详情也可独立收起。玩家界面和玩家安全 API 均不显示模组场景数量、
+当前编号或推进比例；这些结构只在 Keeper 内部保留。
+
+对“打晕 NPC”“隐藏起来”等明确且存在失败代价的行动，系统会先执行对应的「格斗（斗殴）」或「潜行」
+检定，再在回复顶部显示检定项、掷骰、目标值和结果。搜查、聆听、开锁、说服、话术、恐吓、心理学、
+急救和攀爬等常见意图也有对应判定提示。
+
+默认模型为 `deepseek-v4-flash-vision-exp`，并显式声明 `1,000,000` token 上下文窗口：
+
+```dotenv
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
+DEEPSEEK_CONTEXT_WINDOW=1000000
+
+# MinerU 文档解析（PDF → content_list + images）
+MINERU_API_KEY=...
+MINERU_BASE_URL=https://mineru.net
+```
+
+应用不再设置“整个战役累计 token 上限”。供应商仍会限制单次请求的上下文长度，因此系统会永久保存
+完整对话，只把近期完整工具回合和与当前输入相关的旧回合送入模型。这样可持续推进长战役，同时避免破坏
+assistant/tool 消息配对。私有 PDF 内容会发送给所配置的模型供应商；使用第三方模型前应确认其数据政策。
+DeepSeek 思考模式的工具回合会同步保存并回传 `reasoning_content`；旧存档中缺少该字段的不完整
+工具中间消息会在恢复时过滤，已发生的玩家输入和 Keeper 最终叙述仍保留。
+
+## PDF 模组
+
+运行中可用以下 Keeper 命令：
+
+```text
+/module add D:\Modules\scenario.pdf
+/module status
+/module next 玩家已找到钥匙并打开地下室
+/module export data\modules\scenario-reviewed.json
+```
+
+模组 JSON 使用 `version: 2`，将信息分开持久化：
+
+- `actors`：每名 NPC / 怪物的属性、技能、攻击、护甲、理智损失和来源页。
+- `locations`：稳定地点信息、氛围、可交互特征和地点连接。
+- `source_chunks`：可追溯原文。`text` 保存 DeepSeek 复核稿，`raw_text` 保存 MinerU 原文，
+  `extraction_method` 标记来源（`mineru` / `mineru+deepseek` / `manual`）；默认最多两页一块，
+  不承担剧情推进职责。
+- `scenes`：当前局面、出场实体引用、线索、事件、检定、后果、目标和秘密。
+- `story.nodes / story.edges`：明确的剧情大纲、节点和有条件分支。
+- `analysis`：MinerU/复核/结构分析的状态、模型、token 用量与回退警告。
+
+导入器只使用 MinerU 解析结果：MinerU 完成双栏、表格、图片和标题层级识别；DeepSeek 在此基础上复核
+阅读顺序与表格，并识别地图/角色卡图片；随后 DeepSeek 生成 actors/locations/scenes/story。MinerU 结果按
+PDF 内容 hash 缓存在 `data/mineru/<sha256>/`，重新分析默认复用缓存。单批复核失败会保留 MinerU 原文并标记
+`partial`；不会丢失整本模组。旧版 `hybrid-vision` 与 v1 `sections` 模组已不再支持，需要删除后重新导入 PDF。
+
+原始 PDF 存在 `data/modules/<模组ID>.pdf`，结构化结果存在同名 `.json`；两者均为 Keeper 私密资料且不会进入 Git。
+旧版本已经导入但没有保留 PDF 的模组需要重新上传。运行时只使用 MinerU + DeepSeek 复核管道，不再使用 pymupdf
+或 Grok 解析 PDF。
+
+模组运行时只把当前剧情节点对应的场景、地点、出场实体与原文片段送给 Agent；`search_module` 不读取其他节点。
+`advance_module` 只能沿当前节点的可用边推进，多分支时必须选择由玩家行动实际触发的 `next_node_id`。
+系统提示和最终输出门禁共同阻止完整剧情、未来秘密和结局泄露。`data/modules/*.json`、同名 `.pdf` 与 `saves/`
+已被 Git 忽略，因为两者都包含 Keeper 私密内容，不应发给玩家。
 
 ---
 
@@ -111,14 +224,22 @@ python -m coc_keeper.cli
 
 | # | 里程碑 | 内容 | 状态 |
 | --- | --- | --- | --- |
-| M0 | 规则引擎核心 | 骰子、角色卡、技能/对抗/幸运/理智检定 | ✅ 已完成 |
-| M1 | 规则引擎扩展 | 战斗、伤害、疯狂发作状态机、追逐 | ⏳ 待开始 |
-| M2 | 规则检索 RAG | 规则书清洗/实体分块 + 自实现字级 BM25 + `search_rules`（可解释命中） | ✅ 已完成 |
-| M3 | KP Agent 核心 | 工具调用循环（DeepSeek）、记忆、单人跑团 | 🚧 代码完成，待接入 DeepSeek 冒烟测试 |
-| M4 | 多人跑团 | 多人会话、完整战役状态持久化 | ⏳ 待开始 |
-| M5 | 工程化 | 评估、可观测性、成本与安全、CLI/界面 | ⏳ 待开始 |
+| M0 | 规则引擎核心 | 骰子、角色卡、技能/对抗/幸运/理智检定 | 已完成 |
+| M1 | 规则引擎扩展 | 战斗、射程、伤害/护甲、疯狂状态机、追逐、治疗 | 已完成 |
+| M2 | 规则检索 RAG | 纯 Python BM25、逐页引用、内置核心规则回退 | 已完成 |
+| M3 | KP Agent 核心 | 工具调用循环、记忆、规则查询、单人 CLI | 已完成；真实供应商需单独冒烟 |
+| M4 | 多人跑团 | 多角色状态、团队幸运、JSON 存档与恢复 | 已完成 |
+| M5 | 工程化 | 固定种子 eval、tracing、token/成本、输入安全、CLI | 已完成 |
+| M6 | PDF 模组 | 目录/分页切分、当前场景检索、图结构推进、存档与防剧透 | 已完成 |
+| M7 | 本地 WebUI | 永久角色卡、五组选卡、技能加点、模组库与独立战役 | 已完成 |
+| M8 | 职业建卡 | Excel 职业目录、职业公式、双点池、信用评级与 70/60 上限 | 已完成 |
+| M9 | 结构化模组 | NPC/怪物实体、地点/场景拆分、剧情大纲与分支图、后台语义分析 | 已完成 |
 
-详细的学习路线见 [`docs/learning-plan.md`](docs/learning-plan.md)，架构设计见 [`docs/design.md`](docs/design.md)。
+详细的学习路线见 [`docs/learning-plan.md`](docs/learning-plan.md)，按代码阅读的建议见
+[`docs/learning-guide.md`](docs/learning-guide.md)，架构设计见 [`docs/design.md`](docs/design.md)。
+
+在线验收边界：仓库不保存 API 密钥，也不把私有规则书全文提交到 Git。`scripts/smoke_llm.py`
+和 `scripts/extract_rules_mineru.py` 分别用于在本机配置就绪后验证这两项外部资源。
 
 ---
 

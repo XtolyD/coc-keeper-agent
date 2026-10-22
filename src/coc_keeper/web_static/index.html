@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="CoC 7th Keeper 本地跑团工作台">
+  <title>Keeper's Desk</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=2.2.0">
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  <script src="/assets/app.js?v=2.2.0" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="brand" type="button" data-view="characters" aria-label="回到角色卡库">
+        <span class="brand-mark">K</span>
+        <span>Keeper's Desk</span>
+      </button>
+      <div class="provider-status" id="provider-status" aria-live="polite">
+        <span class="status-dot"></span>
+        <span>连接中</span>
+      </div>
+    </header>
+
+    <aside class="sidebar" aria-label="主导航">
+      <div class="sidebar-primary">
+        <button class="icon-button sidebar-toggle" id="sidebar-toggle" type="button" aria-label="收起主导航" title="收起主导航" aria-expanded="true">
+          <i data-lucide="panel-left-close"></i>
+        </button>
+        <nav>
+          <button class="nav-item active" type="button" data-view="characters" title="角色卡">
+            <i data-lucide="contact-round"></i><span>角色卡</span>
+          </button>
+          <button class="nav-item" type="button" data-view="modules" title="模组库">
+            <i data-lucide="book-open-text"></i><span>模组库</span>
+          </button>
+          <button class="nav-item" type="button" data-view="games" title="战役">
+            <i data-lucide="messages-square"></i><span>战役</span>
+          </button>
+        </nav>
+      </div>
+      <div class="sidebar-foot">
+        <span>本地永久存储</span>
+        <span class="mono">v2.1.0</span>
+      </div>
+    </aside>
+
+    <main class="main-content" id="content" tabindex="-1"></main>
+  </div>
+
+  <dialog id="modal" class="modal">
+    <div class="modal-frame">
+      <button class="icon-button modal-close" type="button" aria-label="关闭" title="关闭">
+        <i data-lucide="x"></i>
+      </button>
+      <div id="modal-content"></div>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

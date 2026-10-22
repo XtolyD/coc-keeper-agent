@@ -13,7 +13,7 @@
 |---|---|---|
 | 文档解析 | `docparser/` | PDF → `content_list.json` + 图片（MinerU API） |
 | 检索分块 | `retrieval/chunker` | `content_list` → 语义块（type/name/text/page）→ BM25 |
-| 图/语义 | `vision/` + `module/` | 分析 MinerU 抽出的图片（DeepSeek 视觉）；模组语义归并 |
+| 图/语义 | `vision/` + `module_pipeline/` | DeepSeek 复核正文/图片；模组结构分析 |
 
 **为什么引入 MinerU**：此前规则书用 pymupdf 几何启发式（坐标/字号分级）+ 补丁
 （`ATTR_NAMES`、标点结尾排除）来强撑版面理解，对不规则模组书不可持续。
@@ -84,7 +84,7 @@ src/coc_keeper/docparser/
 
 - 复用 `config.Settings` 读 `MINERU_API_KEY`（密钥只在 config 读，不打印）。
 - 纯 I/O + 数据类，**可注入 base_url 便于单测**（mock requests）。
-- 不依赖 `retrieval/` / `vision/` / `module/`——只输出结构，不消费别层。
+- 不依赖 `retrieval/` / `vision/` / `module_pipeline/`——只输出结构，不消费别层。
 
 ## 4. 数据类（result.py）
 

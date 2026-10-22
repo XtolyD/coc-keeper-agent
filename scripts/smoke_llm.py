@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # 非交互输出环境无需调整
+    pass
 
 from coc_keeper.agent.agent import KeeperAgent
 from coc_keeper.agent.llm import LLMClient

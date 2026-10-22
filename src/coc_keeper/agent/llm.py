@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any, Optional
 
 from openai import OpenAI
@@ -14,7 +15,10 @@ from ..config import Settings
 class LLMResponse:
     """一次 LLM 调用的结果。"""
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
     tool_calls: list[dict] = field(default_factory=list)
+    usage: dict[str, int] = field(default_factory=dict)
+    latency_ms: float = 0.0
 
 
 class LLMClient:
@@ -24,9 +28,14 @@ class LLMClient:
         self.settings = settings
         if not settings.is_configured:
             raise RuntimeError(
-                "LLM 未配置：请在 .env 中设置 DEEPSEEK_API_KEY（可选 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL）"
+                "LLM 未配置：请在 .env 中配置所选供应商的 API 地址、密钥和模型"
             )
-        self.client = OpenAI(api_key=settings.api_key, base_url=settings.base_url)
+        self.client = OpenAI(
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            timeout=settings.request_timeout,
+            max_retries=settings.max_retries,
+        )
 
     def chat(
         self,
@@ -35,6 +44,8 @@ class LLMClient:
         tool_choice: str = "auto",
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
+        response_format: Optional[dict[str, Any]] = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": self.settings.model,
@@ -45,11 +56,24 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        if response_format is not None:
+            kwargs["response_format"] = response_format
 
+        started = perf_counter()
         resp = self.client.chat.completions.create(**kwargs)
+        latency_ms = (perf_counter() - started) * 1000
+        if not hasattr(resp, "choices"):
+            raise RuntimeError("模型接口没有返回 OpenAI 兼容的 chat.completions JSON")
         msg = resp.choices[0].message
+        usage = getattr(resp, "usage", None)
+        reasoning_content = getattr(msg, "reasoning_content", None)
+        if reasoning_content is None:
+            reasoning_content = (getattr(msg, "model_extra", None) or {}).get("reasoning_content")
         return LLMResponse(
             content=msg.content,
+            reasoning_content=reasoning_content,
             tool_calls=[
                 {
                     "id": tc.id,
@@ -58,4 +82,10 @@ class LLMClient:
                 }
                 for tc in (msg.tool_calls or [])
             ],
+            usage={
+                "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+            },
+            latency_ms=latency_ms,
         )
