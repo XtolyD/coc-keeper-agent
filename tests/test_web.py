@@ -177,11 +177,25 @@ def test_web_reanalyze_uses_background_job(tmp_path, monkeypatch):
     assert detail["module"]["analysis"]["status"] == "complete"
 
 
+def test_web_skill_catalog_api(tmp_path):
+    make_context(tmp_path)
+    client = TestClient(web.app)
+    payload = client.get("/api/skills?q=取悦").json()
+    assert payload["skills"][0]["canonical_name"] == "魅惑"
+    detail = client.get("/api/skills/detail?name=%E8%A1%A8%E6%BC%94").json()
+    assert detail["canonical_name"] == "艺术/手艺"
+    assert detail["sections"]["description"]
+    slash_detail = client.get("/api/skills/detail?name=%E8%89%BA%E6%9C%AF%2F%E6%89%8B%E8%89%BA").json()
+    assert slash_detail["canonical_name"] == "艺术/手艺"
+    categories = client.get("/api/skills").json()["categories"]
+    assert "investigation" in categories and "social" in categories
+
+
 def test_web_attribute_labels_and_asset_version():
     client = TestClient(web.app)
     page = client.get("/").text
-    assert "/assets/app.js?v=2.2.0" in page
-    assert "/assets/styles.css?v=2.2.0" in page
+    assert "/assets/app.js?v=2.3.0" in page
+    assert "/assets/styles.css?v=2.3.0" in page
     assert 'id="sidebar-toggle"' in page
     script = client.get("/assets/app.js")
     assert script.status_code == 200
@@ -200,4 +214,5 @@ def test_web_attribute_labels_and_asset_version():
     assert "地点与场景" in script.text
     assert "故事线" in script.text
     assert "重新解析并复核" in script.text
+    assert "技能说明与判定参考" in script.text
     assert 'method: "DELETE"' in script.text

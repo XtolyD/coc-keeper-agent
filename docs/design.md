@@ -71,6 +71,17 @@
 BM25 与语义检索在规则查询上的差异。规则查询的难点在于：CoC 规则高度结构化
 （表格、阈值），语义检索未必比关键词检索更准，这正是值得亲手验证的课题。
 
+### 3.2.1 技能知识（Skill Catalog）
+
+技能是跑团中最频繁的判定知识，单独建一层：
+
+- `skills_core.json`：从角色卡 xlsx 的 `附表` 生成，保存 110 条技能事实（名称、基础值、说明、难度、孤注一掷与失败示例）。
+- `skills_playbook.json`：人工维护 55 个 canonical 技能的使用语义（use_when、avoid_when、alternatives、failure_style、triggers）。
+- `skills.py`：`SkillCatalog` 负责别名/父子解析、精确/BM25 检索、行动候选与角色当前值。
+- Agent 工具：`resolve_skill` 给候选（不强制）、`search_skills`/`get_skill` 查详情、`roll_skill_check` 自动解析别名与子技能。
+
+原则：Agent 是 KP，是否检定、用哪个技能由 Agent 判断；工具只提供事实、候选和结果。判定数值由角色卡与规则工具给出，LLM 不自行计算。
+
 ### 3.3 KP Agent（M3）
 
 采用 **手写工具调用循环**，而非直接上 LangGraph：

@@ -15,6 +15,10 @@ const state = {
   characters: [],
   modules: [],
   games: [],
+  skills: [],
+  skillCategories: [],
+  skillQuery: "",
+  skillCategory: "",
   activeGame: null,
   draft: null,
   selectedCandidate: null,
@@ -29,6 +33,11 @@ const content = document.querySelector("#content");
 const modal = document.querySelector("#modal");
 const modalContent = document.querySelector("#modal-content");
 const toast = document.querySelector("#toast");
+
+const SKILL_CATEGORY_LABELS = {
+  investigation: "调查", social: "社交", combat: "战斗", physical: "体能",
+  technical: "技术", knowledge: "知识", medical: "医疗", art: "艺术", other: "其他",
+};
 
 const ATTRIBUTE_LABELS = {
   STR: "力量",
@@ -102,6 +111,7 @@ function render() {
   if (state.activeGame) renderGame();
   else if (state.view === "characters") renderCharacters();
   else if (state.view === "modules") renderModules();
+  else if (state.view === "skills") renderSkills();
   else renderGames();
   refreshIcons();
 }
@@ -554,6 +564,80 @@ async function deleteModule(id, title) {
     renderModules();
     refreshIcons();
     notify("模组已删除");
+  } catch (error) { notify(error.message, true); }
+}
+
+function skillBaseLabel(skill) {
+  const base = skill.base || {};
+  if (base.kind === "fixed") return `${base.value}%`;
+  if (base.kind === "attribute") return `${base.attribute}${base.factor === 0.5 ? "/2" : ""}`;
+  return "—";
+}
+
+function renderSkills() {
+  const options = (state.skillCategories.length ? state.skillCategories : Object.keys(SKILL_CATEGORY_LABELS))
+    .map((category) => `<option value="${esc(category)}" ${state.skillCategory === category ? "selected" : ""}>${esc(SKILL_CATEGORY_LABELS[category] || category)}</option>`).join("");
+  content.innerHTML = `<section class="page"><header class="page-header"><h1>技能</h1><div class="page-actions"><span class="row-meta">技能说明与判定参考</span></div></header>
+    <form class="upload-band" id="skill-search"><div class="field"><label for="skill-query">搜索技能</label><input id="skill-query" value="${esc(state.skillQuery)}" placeholder="技能名、别名或用途，例如：搜查、取悦、开锁"></div><div class="field"><label for="skill-category">类别</label><select id="skill-category"><option value="">全部</option>${options}</select></div><button class="button primary" type="submit">${icon("search")}查询</button></form>
+    <div id="skill-results" class="collection"><div class="empty-state"><div>${icon("book-marked")}<h2>加载技能中</h2></div></div></div>
+  </section>`;
+  document.querySelector("#skill-search").addEventListener("submit", (event) => { event.preventDefault(); loadSkills(); });
+  document.querySelector("#skill-category").addEventListener("change", () => loadSkills());
+  loadSkills();
+}
+
+async function loadSkills() {
+  const query = document.querySelector("#skill-query")?.value.trim() || "";
+  const category = document.querySelector("#skill-category")?.value || "";
+  state.skillQuery = query;
+  state.skillCategory = category;
+  try {
+    const payload = await api(`/api/skills?q=${encodeURIComponent(query)}&category=${encodeURIComponent(category)}&limit=80`);
+    state.skills = payload.skills || [];
+    state.skillCategories = payload.categories || [];
+    renderSkillResults();
+  } catch (error) { notify(error.message, true); }
+}
+
+function renderSkillResults() {
+  const target = document.querySelector("#skill-results");
+  if (!target) return;
+  const rows = state.skills.map((skill) => `<div class="collection-row">
+    <div><div class="row-title">${esc(skill.name)}${skill.canonical_name && skill.canonical_name !== skill.name ? ` <span class="row-meta">→ ${esc(skill.canonical_name)}</span>` : ""}</div>
+    <div class="row-meta">${esc(SKILL_CATEGORY_LABELS[skill.category] || skill.category)} · 基础 ${esc(skillBaseLabel(skill))} · ${esc(skill.source?.range || "")}</div>
+    <div class="row-meta">${esc(skill.summary)}</div></div>
+    <div class="row-actions"><button class="button skill-detail" data-name="${esc(skill.name)}" type="button">${icon("book-open")}详情</button></div>
+  </div>`).join("");
+  target.innerHTML = rows || `<div class="empty-state"><div>${icon("search-x")}<h2>没有找到技能</h2></div></div>`;
+  document.querySelectorAll(".skill-detail").forEach((button) => button.addEventListener("click", () => showSkillDetail(button.dataset.name)));
+  refreshIcons();
+}
+
+async function showSkillDetail(name) {
+  try {
+    const skill = await api(`/api/skills/detail?name=${encodeURIComponent(name)}`);
+    const sections = skill.sections || {};
+    const sectionLabels = {
+      description: "技能说明", special_applicability: "特殊适用",
+      difficulty_depends_on: "难度依据", normal_difficulty: "普通难度",
+      hard_difficulty: "困难难度", push_examples: "孤注一掷示例",
+      push_failure: "孤注一掷失败", insane_failure: "疯狂失败",
+    };
+    const sectionHTML = Object.entries(sectionLabels).map(([key, label]) => {
+      const value = sections[key];
+      return value ? `<h3>${esc(label)}</h3><p class="skill-text">${esc(value)}</p>` : "";
+    }).join("");
+    const alternatives = (skill.alternatives || []).map((item) => `<li><strong>${esc(item.skill)}</strong>：${esc(item.difference)}</li>`).join("");
+    modalContent.innerHTML = `<div class="modal-body"><h2 class="modal-title">${esc(skill.name)}</h2>
+      <div class="row-meta">${esc(SKILL_CATEGORY_LABELS[skill.category] || skill.category)} · 基础 ${esc(skillBaseLabel(skill))} · ${esc(skill.source?.sheet || "")} ${esc(skill.source?.range || "")}</div>
+      ${skill.use_when?.length ? `<h3>什么时候使用</h3><ul>${skill.use_when.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+      ${skill.avoid_when?.length ? `<h3>什么时候换别的技能</h3><ul>${skill.avoid_when.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+      ${alternatives ? `<h3>容易混淆的技能</h3><ul>${alternatives}</ul>` : ""}
+      ${sectionHTML}
+      <div class="form-footer"><button class="button primary" type="button" id="close-skill-detail">关闭</button></div></div>`;
+    modal.showModal();
+    refreshIcons();
+    document.querySelector("#close-skill-detail").addEventListener("click", () => modal.close());
   } catch (error) { notify(error.message, true); }
 }
 

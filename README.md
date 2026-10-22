@@ -37,9 +37,11 @@ coc-keeper-agent/
 │   ├── docparser-spec.md     # MinerU 解析规范
 │   ├── segments-spec.md      # 语义分块规范
 │   ├── retrieval-spec.md     # BM25 检索规范
+│   ├── skill-data-spec.md    # 技能数据与 SkillCatalog 规范
 │   └── module-spec.md        # 模组导入规范（MinerU + DeepSeek 复核）
 ├── scripts/
 │   ├── extract_rules_mineru.py # 规则书 MinerU 抽取/分块
+│   ├── extract_skills.py     # 从 xlsx 生成 skills_core.json
 │   ├── smoke_llm.py          # LLM 连通性 / 工具调用冒烟测试
 │   └── run_evals.py          # 固定种子离线评估
 ├── data/
@@ -62,6 +64,12 @@ coc-keeper-agent/
 │   ├── module_pipeline/      # MinerU 解析 → DeepSeek 复核 → 结构分析
 │   ├── module_analysis.py    # DeepSeek 分阶段语义分析
 │   ├── module_service.py     # 模组应用服务与后台任务编排
+│   ├── skills.py             # 技能目录：别名/基础值/行动候选/检索
+│   ├── skill_data.py         # 从 skills_core.json 派生技能基础数据
+│   ├── data/
+│   │   ├── occupations.json  # 229 个职业模板
+│   │   ├── skills_core.json  # 110 条技能事实（xlsx 生成）
+│   │   └── skills_playbook.json # 技能使用语义（人工维护）
 │   ├── web.py                # FastAPI WebUI/API（含 create_app）
 │   ├── web_jobs.py           # 后台任务管理
 │   ├── docparser/            # MinerU 客户端与 ParseResult
@@ -103,6 +111,9 @@ cd coc-keeper-agent
 
 # 1. （可选·离线）MinerU 解析规则书 → rules_chunks.json
 python scripts\extract_rules_mineru.py --write data\rulebook\rules_chunks.json
+
+# 可选：从本地角色卡 xlsx 重新生成技能事实数据
+python scripts\extract_skills.py
 
 # 2. 运行完整测试与离线评估
 python -m pytest -q
@@ -152,6 +163,7 @@ WebUI 的推荐流程是：
    DeepSeek 复核、结构分析。单页/单批失败会保留 MinerU 原文并列出待校对警告。
 6. 在“检查 / 编辑”中分别校对角色与怪物、地点与场景、故事线和 PDF 原文。
 7. 在“战役”中分别选择角色卡和模组后开局。战役保存在 `data/campaigns/`，角色状态变化会同步回永久角色卡。
+8. “技能”页可检索技能说明、基础值、使用场景、容易混淆的技能与失败风格；这些数据也供 KP Agent 在跑团中调用。
 
 角色卡、模组和战役是三个独立实体，库列表均提供删除入口。删除战役不会删除它引用的角色卡或模组；
 为避免留下无法同步的引用，被战役使用的角色卡和模组需先删除对应战役。模组库修改只影响之后创建的战役，
@@ -181,6 +193,22 @@ MINERU_BASE_URL=https://mineru.net
 assistant/tool 消息配对。私有 PDF 内容会发送给所配置的模型供应商；使用第三方模型前应确认其数据政策。
 DeepSeek 思考模式的工具回合会同步保存并回传 `reasoning_content`；旧存档中缺少该字段的不完整
 工具中间消息会在恢复时过滤，已发生的玩家输入和 Keeper 最终叙述仍保留。
+
+## 技能知识
+
+技能数据分两层：
+
+- `src/coc_keeper/data/skills_core.json`：由 `scripts/extract_skills.py` 从角色卡 xlsx 的 `附表` 生成，保存技能名、基础值、说明、难度、孤注一掷与失败示例。
+- `src/coc_keeper/data/skills_playbook.json`：人工维护的技能使用语义，记录什么时候用、何时换别的技能、容易混淆的技能与失败风格。
+
+Agent 在跑团中使用：
+
+- `resolve_skill`：玩家行动 → 候选技能（仅供参考，最终由 KP 决定）
+- `get_skill`：读取单个技能的完整说明
+- `search_skills`：按关键词/类别检索技能
+- `roll_skill_check`：自动把别名/子技能解析到角色卡的 canonical 技能
+
+WebUI 的“技能”页提供同样的检索与详情视图。
 
 ## PDF 模组
 

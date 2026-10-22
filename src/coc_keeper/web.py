@@ -29,6 +29,7 @@ from .game_store import GameRecord, GameStore, TranscriptEntry
 from .module_service import ModuleApplicationService
 from .module_store import ModuleStore
 from .modules import KeeperModule, ModuleRuntime
+from .skills import get_skill_catalog
 from .web_jobs import JobManager
 from .occupations import (
     get_occupation, interest_point_budget, list_occupations,
@@ -141,7 +142,7 @@ class AppContext:
         return payload
 
 
-app = FastAPI(title="CoC Keeper", version="2.2.0")
+app = FastAPI(title="CoC Keeper", version="2.3.0")
 static_root = Path(__file__).resolve().parent / "web_static"
 app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
@@ -281,6 +282,42 @@ def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
     payload["interest_point_budget"] = interest_point_budget(sheet.attributes)
     payload["base_skills"] = base_skill_values(sheet.attributes)
     return payload
+
+
+@app.get("/api/skills")
+def list_skills(q: str | None = None, category: str | None = None, limit: int = 50):
+    catalog = get_skill_catalog()
+    limit = max(1, min(int(limit), 200))
+    if q and q.strip():
+        hits = catalog.search(q, category=category, limit=limit)
+        cards = [card for card, _score in hits]
+    else:
+        cards = [
+            card for card in catalog.cards()
+            if category is None or card.category == category
+        ][:limit]
+    return {
+        "skills": [card.to_dict() for card in cards],
+        "categories": catalog.categories(),
+        "count": len(cards),
+    }
+
+
+@app.get("/api/skills/detail")
+def skill_detail_query(name: str):
+    return _skill_detail(name)
+
+
+@app.get("/api/skills/{name:path}")
+def skill_detail(name: str):
+    return _skill_detail(name)
+
+
+def _skill_detail(name: str):
+    card = get_skill_catalog().get(name)
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"未找到技能: {name}")
+    return card.to_dict(detail=True)
 
 
 @app.get("/api/modules")

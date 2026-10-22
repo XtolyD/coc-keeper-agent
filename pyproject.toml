@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coc-keeper-agent"
-version = "2.2.0"
+version = "2.3.0"
 description = "CoC 7th 版跑团 KP Agent —— 用于学习 Agent 构建工程的入门项目"
 readme = "README.md"
 requires-python = ">=3.11"
