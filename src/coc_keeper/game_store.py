@@ -39,6 +39,7 @@ class GameRecord:
     memory: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+    completed_requests: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +48,7 @@ class GameRecord:
             "session": self.session.to_dict(),
             "transcript": [entry.__dict__ for entry in self.transcript],
             "memory": self.memory, "created_at": self.created_at, "updated_at": self.updated_at,
+            "completed_requests": self.completed_requests,
         }
 
     @classmethod
@@ -58,6 +60,7 @@ class GameRecord:
             transcript=[TranscriptEntry.from_dict(item) for item in data.get("transcript", [])],
             memory=list(data.get("memory", [])), created_at=str(data.get("created_at", _now())),
             updated_at=str(data.get("updated_at", _now())),
+            completed_requests=dict(data.get("completed_requests", {})),
         )
 
     def relevant_history(self, query: str, *, limit: int = 6) -> list[str]:

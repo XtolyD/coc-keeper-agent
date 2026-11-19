@@ -61,12 +61,10 @@ def _handle_command(command: str, session: Session, agent: KeeperAgent, autosave
     """处理斜杠命令；返回 True 表示命令已处理。"""
     name, _, argument = command.partition(" ")
     if name == "/help":
-        print("/status 角色卡 | /players 玩家 | /trace 追踪 | /save [路径] 保存")
+        print("/status 角色卡 | /trace 追踪 | /save [路径] 保存")
         print("/module add <PDF或JSON> | /module status | /module next <原因> | /module export <JSON>")
     elif name == "/status":
         _print_sheet(session.investigator)
-    elif name == "/players":
-        print("玩家：" + "、".join(session.players))
     elif name == "/trace":
         print(json.dumps(agent.tracer.summary(), ensure_ascii=False, indent=2))
     elif name == "/save":

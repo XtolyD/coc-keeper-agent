@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import pytest
+
 from coc_keeper.agent.agent import KeeperAgent
 from coc_keeper.agent.llm import LLMResponse
 from coc_keeper.agent.state import Session
@@ -69,3 +71,27 @@ def test_agent_does_not_auto_roll_without_its_own_tool_call():
     assert not any(message.get("tool_calls") for message in messages)
     assert not any(message["role"] == "tool" for message in messages)
     assert "本轮已执行的行动检定" not in messages[0]["content"]
+
+
+@pytest.mark.parametrize("difficulty,digits,outcome,natural", [
+    ("hard", (0, 4), "失败", "常规成功"),
+    ("hard", (0, 2), "成功", "困难成功"),
+    ("extreme", (0, 2), "失败", "困难成功"),
+])
+def test_agent_check_summary_explains_action_outcome(scripted, difficulty, digits, outcome, natural):
+    settings = Settings(api_key="test", base_url="https://example.invalid", model="stub")
+    session = Session()
+    session.investigator.skills["侦查"] = 50
+    agent = KeeperAgent(session, settings, rng=scripted(*digits))
+    agent.llm = StubLLM([
+        LLMResponse(tool_calls=[{
+            "id": "call-check", "name": "roll_skill_check",
+            "arguments": '{"skill":"侦查","difficulty":"' + difficulty + '"}',
+        }]),
+        LLMResponse(content="你继续调查。"),
+    ])
+
+    reply = agent.respond("我仔细调查这个房间")
+
+    assert f"行动{outcome}（自然成功度：{natural}）" in reply
+    assert "你继续调查。" in reply

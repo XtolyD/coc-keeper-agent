@@ -2,6 +2,7 @@
 import time
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 import coc_keeper.web as web
@@ -19,7 +20,6 @@ def make_module(title="测试模组") -> KeeperModule:
 
 def make_context(tmp_path) -> web.AppContext:
     context = web.AppContext(tmp_path / "data")
-    web.create_app(context)
     return context
 
 
@@ -34,7 +34,7 @@ def wait_job(client, job_id):
 
 def test_web_character_module_and_game_flow(tmp_path):
     context = make_context(tmp_path)
-    client = TestClient(web.app)
+    client = TestClient(web.create_app(context))
     index_response = client.get("/")
     assert index_response.status_code == 200
     assert index_response.headers["cache-control"] == "no-store"
@@ -106,25 +106,25 @@ def test_web_character_module_and_game_flow(tmp_path):
 
 
 def test_web_status_declares_mineru_and_deepseek(tmp_path, monkeypatch):
-    make_context(tmp_path)
+    context = make_context(tmp_path)
     monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(
-        is_configured=True, model="deepseek-v4-flash-vision-exp",
+        is_configured=True, model="deepseek-flash",
         context_window=1_000_000, base_url="https://api.deepseek.com",
         mineru_api_key="mineru-key", mineru_base_url="https://mineru.net",
     ))
-    client = TestClient(web.app)
+    client = TestClient(web.create_app(context))
     payload = client.get("/api/status").json()
     assert payload["context_window"] == 1_000_000
     assert payload["mineru"]["configured"] is True
     assert payload["review"] == {
-        "configured": True, "provider": "DeepSeek", "model": "deepseek-v4-flash-vision-exp",
+        "configured": True, "provider": "DeepSeek", "model": "deepseek-flash",
     }
     assert "vision" not in payload
 
 
 def test_web_upload_runs_background_import_job(tmp_path, monkeypatch):
     context = make_context(tmp_path)
-    client = TestClient(web.app)
+    client = TestClient(web.create_app(context))
 
     class StubService:
         def import_pdf(self, source_path, *, title=None, source_name=None, remove_source=False):
@@ -148,7 +148,7 @@ def test_web_upload_runs_background_import_job(tmp_path, monkeypatch):
 
 def test_web_reanalyze_uses_background_job(tmp_path, monkeypatch):
     context = make_context(tmp_path)
-    client = TestClient(web.app)
+    client = TestClient(web.create_app(context))
     source = tmp_path / "test.pdf"
     source.write_bytes(b"%PDF-1.4 fake")
     record = context.modules.create(make_module(), source_pdf=source)
@@ -178,8 +178,8 @@ def test_web_reanalyze_uses_background_job(tmp_path, monkeypatch):
 
 
 def test_web_skill_catalog_api(tmp_path):
-    make_context(tmp_path)
-    client = TestClient(web.app)
+    context = make_context(tmp_path)
+    client = TestClient(web.create_app(context))
     payload = client.get("/api/skills?q=取悦").json()
     assert payload["skills"][0]["canonical_name"] == "魅惑"
     detail = client.get("/api/skills/detail?name=%E8%A1%A8%E6%BC%94").json()
@@ -191,8 +191,159 @@ def test_web_skill_catalog_api(tmp_path):
     assert "investigation" in categories and "social" in categories
 
 
-def test_web_attribute_labels_and_asset_version():
-    client = TestClient(web.app)
+def test_web_skill_all_category_matches_frontend_request(tmp_path):
+    client = TestClient(web.create_app(make_context(tmp_path)))
+    all_skills = client.get("/api/skills?limit=80").json()
+    assert all_skills["count"] > 0
+    for category in ("", "   "):
+        assert client.get("/api/skills", params={"category": category, "limit": 80}).json() == all_skills
+        result = client.get("/api/skills", params={"q": "侦查", "category": category}).json()
+        assert result["skills"][0]["canonical_name"] == "侦查"
+
+
+def test_applications_keep_separate_contexts_and_drafts(tmp_path):
+    first = make_context(tmp_path / "first")
+    second = make_context(tmp_path / "second")
+    app_a, app_b = web.create_app(first), web.create_app(second)
+    assert app_a is not app_b
+    with TestClient(app_a) as a, TestClient(app_b) as b:
+        draft = a.post("/api/character-drafts", json={"name": "甲"}).json()
+        assert draft["draft_id"] in first.drafts
+        assert draft["draft_id"] not in second.drafts
+        from coc_keeper.character import CharacterSheet
+        first.characters.create(CharacterSheet(name="甲"))
+        assert a.get("/api/characters").json()[0]["sheet"]["name"] == "甲"
+        assert b.get("/api/characters").json() == []
+
+
+def make_turn_client(tmp_path, monkeypatch):
+    from coc_keeper.character import CharacterSheet
+
+    context = make_context(tmp_path)
+    character = context.characters.create(CharacterSheet(name="调查员", hp=10))
+    module = context.modules.create(make_module())
+    client = TestClient(web.create_app(context))
+    game = client.post("/api/games", json={
+        "character_id": character.id, "module_id": module.id,
+    }).json()
+    calls = []
+
+    class FakeAgent:
+        def __init__(self, session, *args, **kwargs):
+            self.session = session
+            self.memory = SimpleNamespace(restore=lambda *a, **k: None, snapshot=lambda: [])
+            self.tracer = SimpleNamespace(summary=lambda: {"tools": 1})
+
+        def respond(self, text):
+            calls.append(text)
+            if text == "受伤":
+                self.session.investigator.hp -= 3
+            return "已处理：" + text
+
+    monkeypatch.setattr(web, "KeeperAgent", FakeAgent)
+    monkeypatch.setattr(web, "Settings", lambda: SimpleNamespace(
+        is_configured=True, requires_reasoning_content=False,
+    ))
+    return context, character, module, client, game, calls
+
+
+def test_old_campaign_uses_latest_permanent_character(tmp_path, monkeypatch):
+    context, character, module, client, first, _ = make_turn_client(tmp_path, monkeypatch)
+    second = client.post("/api/games", json={
+        "character_id": character.id, "module_id": module.id,
+    }).json()
+    assert client.post(f"/api/games/{first['id']}/messages", json={"content": "受伤"}).status_code == 200
+    latest = context.characters.get(character.id)
+    latest.sheet.skills["侦查"] = 75
+    context.characters.save(character.id, latest.sheet)
+    response = client.post(f"/api/games/{second['id']}/messages", json={"content": "观察"})
+    assert response.status_code == 200
+    assert response.json()["game"]["character"]["current"]["hp"] == 7
+    assert response.json()["game"]["character"]["skills"]["侦查"] == 75
+    assert context.characters.get(character.id).sheet.hp == 7
+
+
+def test_retried_turn_is_persistently_idempotent(tmp_path, monkeypatch):
+    context, character, _, client, game, calls = make_turn_client(tmp_path, monkeypatch)
+    path = f"/api/games/{game['id']}/messages"
+    request = {"content": "受伤", "request_id": "turn-1"}
+    first = client.post(path, json=request)
+    assert first.status_code == 200
+    # 应用重建后也从存档识别已经提交的请求。
+    restarted = TestClient(web.create_app(web.AppContext(context.data_root)))
+    repeated = restarted.post(path, json=request)
+    assert repeated.status_code == 200
+    assert repeated.json()["reply"] == first.json()["reply"]
+    assert len(repeated.json()["game"]["transcript"]) == 2
+    assert context.characters.get(character.id).sheet.hp == 7
+    assert calls == ["受伤"]
+    conflict = restarted.post(path, json={"content": "观察", "request_id": "turn-1"})
+    assert conflict.status_code == 409
+    assert calls == ["受伤"]
+
+
+@pytest.mark.parametrize("failed_store", ["characters", "games"])
+def test_turn_save_failure_rolls_back_both_records(tmp_path, monkeypatch, failed_store):
+    context, character, _, client, game, _ = make_turn_client(tmp_path, monkeypatch)
+    original_game = context.games.get(game["id"]).to_dict()
+    original_character = context.characters.get(character.id).to_dict()
+    store = getattr(context, failed_store)
+    original_save = store.save
+
+    def fail(*args, **kwargs):
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(store, "save", fail)
+    path = f"/api/games/{game['id']}/messages"
+    payload = {"content": "受伤", "request_id": "retry-after-rollback"}
+    assert client.post(path, json=payload).status_code == 503
+    assert context.games.get(game["id"]).to_dict() == original_game
+    assert context.characters.get(character.id).to_dict() == original_character
+    assert list(context.turns.journal.root.glob("*.json")) == []
+    monkeypatch.setattr(store, "save", original_save)
+    response = client.post(path, json=payload)
+    assert response.status_code == 200
+    assert response.json()["game"]["character"]["current"]["hp"] == 7
+    assert len(response.json()["game"]["transcript"]) == 2
+
+
+def test_first_request_reports_recovery_failure_as_unavailable(monkeypatch):
+    application = web.create_app()
+
+    def fail_init():
+        raise OSError("injected startup recovery failure")
+
+    monkeypatch.setattr(web, "AppContext", fail_init)
+    response = TestClient(application).get("/api/characters")
+    assert response.status_code == 503
+    assert "恢复" in response.json()["detail"]
+
+
+def test_character_edit_recovers_a_pending_turn_before_writing(tmp_path, monkeypatch):
+    context, character, _, _, game, _ = make_turn_client(tmp_path, monkeypatch)
+    before_game = context.games.get(game["id"]).to_dict()
+    before_character = context.characters.get(character.id).to_dict()
+    transaction_id = "c" * 32
+    context.turns.journal.put(transaction_id, {
+        "id": transaction_id, "state": "pending",
+        "game_before": before_game, "character_before": before_character,
+    })
+    latest = context.characters.get(character.id)
+    latest.sheet.hp = 7
+    context.characters.save(character.id, latest.sheet)
+    # 模拟依赖已执行、但角色锁排队期间新产生了待恢复事务。
+    response = web.update_character_skills(
+        character.id, web.SkillUpdateRequest(skills={"侦查": 40}), context=context,
+    )
+    assert response["sheet"]["current"]["hp"] == 10
+    assert response["sheet"]["skills"]["侦查"] == 40
+    context.turns.recover()
+    assert context.characters.get(character.id).sheet.skills["侦查"] == 40
+
+
+def test_web_attribute_labels_and_asset_version(tmp_path):
+    context = make_context(tmp_path)
+    client = TestClient(web.create_app(context))
     page = client.get("/").text
     assert "/assets/app.js?v=2.3.0" in page
     assert "/assets/styles.css?v=2.3.0" in page

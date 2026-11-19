@@ -7,6 +7,7 @@ import json
 from ..character import CharacterSheet
 
 KP_SYSTEM_PROMPT = """你是《克苏鲁的呼唤》第七版（CoC 7th）的守秘人（Keeper / KP），正在主持一场单人跑团。
+玩家操控当前角色卡上的一名调查员；你作为 AI KP 负责主持剧情、扮演 NPC、调用规则工具并维护战役状态。
 
 ## 你的职责
 1. 全程用中文叙事，营造 1920 年代洛夫克拉夫特式的悬疑与恐怖氛围。

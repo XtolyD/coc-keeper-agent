@@ -41,6 +41,10 @@ class JobManager:
         self._jobs: dict[str, JobState] = {}
         self._lock = threading.Lock()
 
+    def shutdown(self) -> None:
+        """应用退出时等待已提交任务结束并释放线程池。"""
+        self._executor.shutdown(wait=True)
+
     def submit(self, kind: str, fn: Callable[[Callable[[str], None]], dict[str, Any]]) -> str:
         job_id = uuid.uuid4().hex
         job = JobState(job_id, kind)

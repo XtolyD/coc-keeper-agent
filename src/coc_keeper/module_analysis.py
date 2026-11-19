@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -34,7 +35,8 @@ ANALYSIS_SYSTEM_PROMPT = """你是《克苏鲁的呼唤》第七版模组结构�
     "clues": [{"id": "clue-...", "name": "", "description": "", "discovery": "如何发现", "skill": "", "leads_to": []}],
     "events": [{"id": "event-...", "title": "", "trigger": "", "description": "",
       "checks": [], "consequences": {"success": "", "failure": ""}, "actor_ids": [], "clue_ids": []}],
-    "objectives": [], "secrets": [], "page_start": 1, "page_end": 1
+    "objectives": [], "secrets": [], "source_chunk_ids": ["source-id"],
+    "page_start": 1, "page_end": 1
   }],
   "story": {
     "outline": ["按因果顺序概括主线与可能结局"], "entry_node_id": "node-...",
@@ -52,6 +54,7 @@ ANALYSIS_SYSTEM_PROMPT = """你是《克苏鲁的呼唤》第七版模组结构�
 5. 不能确定的数据用空字符串、空数组或省略对应属性，绝不猜测。
 6. 如果输入同时包含“DeepSeek 复核稿”和“MinerU 原文”，用复核稿确定阅读顺序和表格结构，
    用 MinerU 原文核对专有名词与数值；两者冲突且无法判断时必须保留不确定性，不能自行编造。
+7. 每个场景的 source_chunk_ids 只能引用输入中与该场景直接相关的原文片段 ID；不要仅因页码相同引用其他场景的片段。
 """
 
 
@@ -112,7 +115,10 @@ class LLMModuleAnalyzer:
         batches = [module.source_chunks[index:index + 2] for index in range(0, len(module.source_chunks), 2)]
         for batch_index, chunks in enumerate(batches, 1):
             self.progress(f"正在分析场景 {batch_index}/{len(batches)}")
-            batch_source = "\n\n".join(chunk.analysis_text() for chunk in chunks if chunk.text)
+            batch_source = "\n\n".join(
+                f"【原文片段 {chunk.id}；第 {chunk.page_start}-{chunk.page_end} 页】\n{chunk.analysis_text()}"
+                for chunk in chunks if chunk.text
+            )
             try:
                 batch_payload, batch_usage = self._request(
                     module, batch_source,
@@ -122,6 +128,7 @@ class LLMModuleAnalyzer:
                     + f"。所有地点和场景 ID 必须以 -b{batch_index} 结尾，避免跨批重复。",
                 )
                 usages.append(batch_usage)
+                batch_payload = self._validate_scene_batch(module, batch_payload, actors, chunks)
             except Exception as exc:  # noqa: BLE001 - a single malformed batch must not discard other analysis
                 batch_payload = self._fallback_scene_batch(module, chunks)
                 warnings.append(f"场景批次 {batch_index} 深度分析回退: {type(exc).__name__}: {exc}")
@@ -163,6 +170,10 @@ class LLMModuleAnalyzer:
         except ValueError as exc:
             warnings.append(f"故事图引用校验回退: {exc}")
             refined = self._build_module(module, {**payload, "story": {}})
+        warnings.extend(
+            f"场景 {scene.id} 未能唯一关联原文片段，保留结构化信息等待校对"
+            for scene in refined.scenes if not scene.source_chunk_ids
+        )
         usage = {
             key: sum(int(item.get(key, 0) or 0) for item in usages)
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
@@ -215,6 +226,34 @@ class LLMModuleAnalyzer:
         location_ids = {str(item.get("location_id", "")) for item in scene_items}
         locations = [location.__dict__ for location in module.locations if location.id in location_ids]
         return {"locations": locations, "scenes": scene_items}
+
+    @classmethod
+    def _validate_scene_batch(
+        cls,
+        module: KeeperModule,
+        payload: dict[str, Any],
+        actors: list[dict[str, Any]],
+        chunks: list[Any],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Validate one response before it can replace the batch's original scenes."""
+        scenes = payload.get("scenes")
+        locations = payload.get("locations", [])
+        if not isinstance(scenes, list) or not scenes or not all(isinstance(item, dict) for item in scenes):
+            raise ValueError("场景批次必须返回非空 scenes 对象数组")
+        if not isinstance(locations, list) or not all(isinstance(item, dict) for item in locations):
+            raise ValueError("场景批次 locations 必须是对象数组")
+        batch_chunk_ids = {chunk.id for chunk in chunks}
+        for scene in scenes:
+            references = scene.get("source_chunk_ids", [])
+            if not isinstance(references, list) or any(item not in batch_chunk_ids for item in references):
+                raise ValueError("场景引用了本批次以外或格式无效的原文片段")
+        validated = cls._build_module(module, {
+            "actors": actors, "locations": locations, "scenes": scenes, "story": {},
+        })
+        return {
+            "locations": [dict(location.__dict__) for location in validated.locations],
+            "scenes": [scene.to_dict() for scene in validated.scenes],
+        }
 
     @staticmethod
     def _merge_scene_batches(payloads: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -273,8 +312,8 @@ class LLMModuleAnalyzer:
 
     @staticmethod
     def _build_module(original: KeeperModule, payload: dict[str, Any]) -> KeeperModule:
-        scene_items = [dict(item) for item in payload.get("scenes", []) if isinstance(item, dict)]
-        location_items = [dict(item) for item in payload.get("locations", []) if isinstance(item, dict)]
+        scene_items = [deepcopy(item) for item in payload.get("scenes", []) if isinstance(item, dict)]
+        location_items = [deepcopy(item) for item in payload.get("locations", []) if isinstance(item, dict)]
         if not scene_items:
             scene_items = [scene.to_dict() for scene in original.scenes]
         chunk_ids = {chunk.id for chunk in original.source_chunks}
@@ -291,14 +330,31 @@ class LLMModuleAnalyzer:
                 item for item in location.get("connections", []) if item in location_ids
             ]
         for scene in scene_items:
+            # Model scene prose is structured analysis, not a new PDF source.
+            scene.pop("text", None)
+            scene.pop("source_text", None)
             start = int(scene.get("page_start", 0))
             end = int(scene.get("page_end", start))
-            linked = [
-                chunk.id for chunk in original.source_chunks
-                if chunk.page_start <= end and chunk.page_end >= start
-            ]
-            scene["source_chunk_ids"] = linked or list(scene.get("source_chunk_ids", []))
-            scene["source_chunk_ids"] = [item for item in scene["source_chunk_ids"] if item in chunk_ids]
+            references = scene.get("source_chunk_ids", [])
+            if not isinstance(references, list) or any(item not in chunk_ids for item in references):
+                raise ValueError(f"场景 {scene.get('id', '')} 的原文片段引用无效")
+            if references:
+                scene["source_chunk_ids"] = list(dict.fromkeys(references))
+            else:
+                # Page overlap alone cannot separate multiple scenes on a page.
+                # Recover only a single whole chunk used by no other scene.
+                candidates = [
+                    chunk for chunk in original.source_chunks
+                    if start <= chunk.page_start and chunk.page_end <= end
+                ]
+                candidate = candidates[0] if len(candidates) == 1 else None
+                shared = candidate is not None and any(
+                    other is not scene
+                    and int(other.get("page_start", 0)) <= candidate.page_end
+                    and int(other.get("page_end", other.get("page_start", 0))) >= candidate.page_start
+                    for other in scene_items
+                )
+                scene["source_chunk_ids"] = [candidate.id] if candidate is not None and not shared else []
             scene["actor_ids"] = [item for item in scene.get("actor_ids", []) if item in actor_ids]
             if scene.get("location_id") not in location_ids:
                 scene["location_id"] = ""

@@ -11,15 +11,13 @@ from typing import Any, Optional
 
 from ..character import CharacterSheet, create_character
 from ..modules import ModuleRuntime
-from ..rules.checks import luck_check
 from ..rules.insanity import InsanityState, InsanityTracker
 
 
 @dataclass
 class Session:
-    """一局跑团的会话状态。MVP 为单调查员；M4 扩展为多人队伍。"""
+    """一名玩家操控一名调查员、由 AI 主持的战役状态。"""
     investigator: CharacterSheet = field(default_factory=create_character)
-    players: dict[str, CharacterSheet] = field(default_factory=dict)
     scene: str = ""
     campaign_log: list[dict[str, Any]] = field(default_factory=list)
     insanity: InsanityTracker = field(default_factory=InsanityTracker)
@@ -27,42 +25,12 @@ class Session:
     character_id: str | None = None
     module_id: str | None = None
 
-    def __post_init__(self) -> None:
-        if not self.players:
-            self.players = {self.investigator.name: self.investigator}
-        else:
-            self.players[self.investigator.name] = self.investigator
-
-    def add_player(self, sheet: CharacterSheet) -> None:
-        self.players[sheet.name] = sheet
-
-    def remove_player(self, name: str) -> None:
-        if name == self.investigator.name:
-            raise ValueError("不能移除主调查员")
-        self.players.pop(name, None)
-
-    def get_player(self, name: str | None = None) -> CharacterSheet:
-        return self.investigator if not name else self.players[name]
-
     def log(self, event: str, **details: Any) -> None:
         self.campaign_log.append({"event": event, "details": details})
-
-    def team_luck_check(self, *, rng=None) -> dict[str, dict]:
-        """对所有玩家分别做幸运检定，返回每名玩家的可序列化结果。"""
-        return {
-            name: {
-                "幸运": sheet.luck,
-                "检定": (result := luck_check(sheet.luck, rng=rng)).roll,
-                "成功": result.success,
-                "结果": result.degree_name,
-            }
-            for name, sheet in self.players.items()
-        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "investigator": self.investigator.to_dict(),
-            "players": {name: sheet.to_dict() for name, sheet in self.players.items()},
             "scene": self.scene,
             "campaign_log": list(self.campaign_log),
             "insanity": {
@@ -79,11 +47,6 @@ class Session:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Session":
         investigator = CharacterSheet.from_dict(data.get("investigator", {}))
-        players_data = data.get("players", {})
-        players = {
-            name: CharacterSheet.from_dict(sheet)
-            for name, sheet in players_data.items()
-        }
         tracker_data = data.get("insanity", {})
         tracker = InsanityTracker(
             state=InsanityState(tracker_data.get("state", InsanityState.STABLE.value)),
@@ -93,7 +56,7 @@ class Session:
         )
         module_data = data.get("module")
         return cls(
-            investigator=investigator, players=players, scene=str(data.get("scene", "")),
+            investigator=investigator, scene=str(data.get("scene", "")),
             campaign_log=list(data.get("campaign_log", [])), insanity=tracker,
             module=ModuleRuntime.from_dict(module_data) if module_data else None,
             character_id=data.get("character_id"), module_id=data.get("module_id"),
@@ -112,7 +75,7 @@ class Session:
 
 @dataclass
 class CampaignStore:
-    """JSON 文件型多人会话存储，M4 的最小可用持久化实现。"""
+    """JSON 文件型单调查员会话存储。"""
     root: Path
 
     def __post_init__(self) -> None:

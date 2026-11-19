@@ -70,9 +70,11 @@ class KeeperAgent:
         if not isinstance(result, dict) or "error" in result:
             return None
         if tool_name == "roll_skill_check":
+            outcome = "成功" if result["成功"] else "失败"
+            degree = result.get("自然成功度", result["结果"])
             return (
                 f"【检定 · {result['检定项']}】D100={result['掷骰']} / "
-                f"目标={result['目标值']} · {result['结果']}"
+                f"目标={result['目标值']} · 行动{outcome}（自然成功度：{degree}）"
             )
         if tool_name == "opposed_check":
             return (

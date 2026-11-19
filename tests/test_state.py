@@ -4,9 +4,8 @@ from coc_keeper.character import CharacterSheet
 from coc_keeper.modules import KeeperModule, ModuleRuntime, ModuleScene
 
 
-def test_session_multiplayer_roundtrip(tmp_path):
-    session = Session(investigator=CharacterSheet(name="甲"))
-    session.add_player(CharacterSheet(name="乙", hp=3, san=40))
+def test_session_roundtrip(tmp_path):
+    session = Session(investigator=CharacterSheet(name="调查员", hp=3, san=40))
     session.scene = "旧宅门厅"
     session.log("发现线索", clue="染血钥匙")
     session.module = ModuleRuntime(KeeperModule("旧宅", "old-house.pdf", [
@@ -14,9 +13,9 @@ def test_session_multiplayer_roundtrip(tmp_path):
     ]))
     path = session.save(tmp_path / "campaign.json")
     restored = Session.load(path)
-    assert set(restored.players) == {"甲", "乙"}
-    assert restored.players["乙"].hp == 3
-    assert restored.players["乙"].san == 40
+    assert restored.investigator.name == "调查员"
+    assert restored.investigator.hp == 3
+    assert restored.investigator.san == 40
     assert restored.scene == "旧宅门厅"
     assert restored.campaign_log[0]["details"]["clue"] == "染血钥匙"
     assert restored.module.module.title == "旧宅"
@@ -37,9 +36,7 @@ def test_campaign_store_rejects_path_traversal(tmp_path):
         store.load("../outside")
 
 
-def test_team_luck_check(scripted):
-    session = Session(investigator=CharacterSheet(name="甲", luck=50))
-    session.add_player(CharacterSheet(name="乙", luck=50))
-    results = session.team_luck_check(rng=scripted(0, 3, 0, 7))
-    assert results["甲"]["成功"] is True
-    assert results["乙"]["成功"] is False
+def test_session_save_schema():
+    assert set(Session().to_dict()) == {
+        "investigator", "scene", "campaign_log", "insanity", "module", "character_id", "module_id",
+    }

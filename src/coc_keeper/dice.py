@@ -10,7 +10,7 @@
 - 百分骰 d100 结果为 1..100（十位骰 0 + 个位骰 0 记作 100）。
 - 大成功：掷出 01。
 - 大失败：掷出 100 总是大失败；若技能/属性 < 50，则 96-100 均为大失败。
-- 奖励骰：额外掷十位骰，取较小（较好）十位；惩罚骰：取较大（较差）十位。
+- 奖励骰：额外掷十位骰，取较小的完整百分骰结果；惩罚骰：取较大结果。
 - 难度：常规 = 全值；困难 = 半值（向下取整）；极难 = 五分之一值（向下取整）。
 """
 from __future__ import annotations
@@ -147,14 +147,13 @@ def d100(bonus_dice: int = 0, penalty_dice: int = 0, rng: Optional[random.Random
     net = bonus_dice - penalty_dice
     units = rng.randint(0, 9)
     tens_digits = [rng.randint(0, 9) for _ in range(1 + abs(net))]
+    # 个位为 0 时，00 表示 100，必须先换算再比较好坏。
+    results = [tens * 10 + units or 100 for tens in tens_digits]
     if net > 0:
-        tens = min(tens_digits)   # 奖励骰：十位取较小（更好）
+        return min(results)
     elif net < 0:
-        tens = max(tens_digits)   # 惩罚骰：十位取较大（更差）
-    else:
-        tens = tens_digits[0]
-    result = tens * 10 + units
-    return 100 if result == 0 else result
+        return max(results)
+    return results[0]
 
 
 def degree_of_success(roll: int, value: int) -> Degree:

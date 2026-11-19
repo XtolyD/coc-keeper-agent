@@ -16,6 +16,7 @@ from ..rules.checks import (
     luck_check, opposed_check, sanity_check, skill_check,
 )
 from ..rules.combat import Combatant, Weapon, resolve_attack
+from ..rules.insanity import InsanityTracker
 from ..retrieval import Index, search_rules
 from ..skills import SkillCatalog, get_skill_catalog
 from .state import Session
@@ -83,14 +84,12 @@ def make_dispatcher(
 
     def _create_character(name: str = "调查员", age: int = 30) -> dict:
         c = create_character(name=name, age=age, rng=rng)
-        if len(session.players) == 1 and session.investigator.name in session.players:
-            session.players.pop(session.investigator.name, None)
-            session.investigator = c
-        session.add_player(c)
+        session.investigator = c
+        session.insanity = InsanityTracker()
         return {"message": f"已创建调查员「{name}」", "character": c.to_dict()}
 
-    def _get_character(name: str | None = None) -> dict:
-        return session.get_player(name).to_dict()
+    def _get_character() -> dict:
+        return session.investigator.to_dict()
 
     def _roll_skill_check(
         skill: str,
@@ -111,6 +110,7 @@ def make_dispatcher(
         return {
             "检定项": label, "数值": value, "难度": difficulty,
             "目标值": r.target, "掷骰": r.roll, "结果": r.degree_name,
+            "自然成功度": r.degree_name, "行动结果": "成功" if r.success else "失败",
             "成功": r.success,
         }
 
@@ -187,31 +187,22 @@ def make_dispatcher(
         delta_hp: int = 0, delta_mp: int = 0, delta_san: int = 0, delta_luck: int = 0,
     ) -> dict:
         c = session.investigator
-        c.hp = _clamp(c.hp + int(delta_hp), 0, c.hp_max)
-        c.mp = _clamp(c.mp + int(delta_mp), 0, c.mp_max)
-        c.san = _clamp(c.san + int(delta_san), 0, 99)
-        c.luck = _clamp(c.luck + int(delta_luck), 0, 99)
+        hp = _clamp(c.hp + int(delta_hp), 0, c.hp_max)
+        mp = _clamp(c.mp + int(delta_mp), 0, c.mp_max)
+        san = _clamp(c.san + int(delta_san), 0, 99)
+        luck = _clamp(c.luck + int(delta_luck), 0, 99)
+        c.hp, c.mp, c.san, c.luck = hp, mp, san, luck
         return {
             "HP": f"{c.hp}/{c.hp_max}", "MP": f"{c.mp}/{c.mp_max}",
             "SAN": f"{c.san}/{c.san_max}", "LUCK": c.luck,
         }
 
-    def _add_player(name: str, age: int = 30) -> dict:
-        if name in session.players:
-            raise ValueError(f"玩家已存在: {name}")
-        sheet = create_character(name=name, age=age, rng=rng)
-        session.add_player(sheet)
-        return {"message": f"已加入调查员「{name}」", "character": sheet.to_dict()}
-
-    def _set_skill(skill: str, value: int, player_name: str | None = None) -> dict:
-        sheet = session.get_player(player_name)
+    def _set_skill(skill: str, value: int) -> dict:
+        sheet = session.investigator
         name = catalog.canonicalize(skill) or str(skill).strip()
         value = _clamp(int(value), 0, 100)
         sheet.skills[name] = value
         return {"调查员": sheet.name, "技能": name, "数值": value}
-
-    def _team_luck_check() -> dict:
-        return {"团队幸运检定": session.team_luck_check(rng=rng)}
 
     def _search_rules(query: str, limit: int = 3, type: str | None = None) -> dict:
         try:
@@ -288,9 +279,7 @@ def make_dispatcher(
         "luck_check": _luck_check,
         "sanity_check": _sanity_check,
         "update_character": _update_character,
-        "add_player": _add_player,
         "set_skill": _set_skill,
-        "team_luck_check": _team_luck_check,
         "search_rules": _search_rules,
         "resolve_skill": _resolve_skill,
         "search_skills": _search_skills,

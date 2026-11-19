@@ -8,6 +8,35 @@ function storeFlag(key, value) {
   catch (_) { /* Preferences remain available for the current page. */ }
 }
 
+function readPendingMessages() {
+  try {
+    const pending = JSON.parse(sessionStorage.getItem("keeper-pending-messages") || "{}");
+    return pending && typeof pending === "object" && !Array.isArray(pending) ? pending : {};
+  } catch (_) { return {}; }
+}
+
+function storePendingMessages() {
+  try { sessionStorage.setItem("keeper-pending-messages", JSON.stringify(state.pendingMessages)); }
+  catch (_) { /* Keep retries available in memory when storage is unavailable. */ }
+}
+
+function messageRequestId(gameId, text) {
+  const key = JSON.stringify([gameId, text]);
+  if (typeof state.pendingMessages[key] !== "string") {
+    state.pendingMessages[key] = crypto.randomUUID();
+    storePendingMessages();
+  }
+  return state.pendingMessages[key];
+}
+
+function completeMessage(gameId, text, requestId) {
+  const key = JSON.stringify([gameId, text]);
+  if (state.pendingMessages[key] === requestId) {
+    delete state.pendingMessages[key];
+    storePendingMessages();
+  }
+}
+
 const state = {
   view: "characters",
   status: null,
@@ -20,6 +49,7 @@ const state = {
   skillQuery: "",
   skillCategory: "",
   activeGame: null,
+  pendingMessages: readPendingMessages(),
   draft: null,
   selectedCandidate: null,
   occupationPreview: null,
@@ -592,7 +622,9 @@ async function loadSkills() {
   state.skillQuery = query;
   state.skillCategory = category;
   try {
-    const payload = await api(`/api/skills?q=${encodeURIComponent(query)}&category=${encodeURIComponent(category)}&limit=80`);
+    const parameters = new URLSearchParams({q: query, limit: "80"});
+    if (category) parameters.set("category", category);
+    const payload = await api(`/api/skills?${parameters}`);
     state.skills = payload.skills || [];
     state.skillCategories = payload.categories || [];
     renderSkillResults();
@@ -710,14 +742,19 @@ async function sendMessage(event) {
   const form = event.currentTarget;
   const textarea = form.querySelector("textarea");
   const text = textarea.value.trim();
-  if (!text) return;
+  if (!text || form.classList.contains("loading")) return;
+  const gameId = state.activeGame.id;
+  const requestId = messageRequestId(gameId, text);
   form.classList.add("loading");
   textarea.value = "";
   try {
-    const result = await api(`/api/games/${state.activeGame.id}/messages`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({content:text})});
-    state.activeGame = result.game;
-    renderGame();
-    refreshIcons();
+    const result = await api(`/api/games/${gameId}/messages`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({content:text, request_id:requestId})});
+    completeMessage(gameId, text, requestId);
+    if (state.activeGame?.id === gameId) {
+      state.activeGame = result.game;
+      renderGame();
+      refreshIcons();
+    }
   } catch (error) { textarea.value = text; notify(error.message, true); form.classList.remove("loading"); }
 }
 

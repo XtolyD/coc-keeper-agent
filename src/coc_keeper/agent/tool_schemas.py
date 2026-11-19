@@ -105,40 +105,16 @@ TOOLS_SCHEMA: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "add_player",
-            "description": "向当前战役加入一名调查员。多人跑团开场时使用。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "调查员姓名"},
-                    "age": {"type": "integer", "description": "年龄，默认30"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "set_skill",
-            "description": "设置指定调查员的技能值，用于建卡或技能成长。",
+            "description": "设置当前调查员的技能值，用于建卡或技能成长。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "skill": {"type": "string", "description": "技能名称"},
                     "value": {"type": "integer", "description": "新的技能值，0到100"},
-                    "player_name": {"type": "string", "description": "调查员姓名；省略为主调查员"},
                 },
                 "required": ["skill", "value"],
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "team_luck_check",
-            "description": "对队伍中所有调查员分别进行幸运检定。",
-            "parameters": {"type": "object", "properties": {}},
         },
     },
     {

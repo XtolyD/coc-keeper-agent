@@ -120,3 +120,26 @@ def test_story_graph_branch_selection_and_roundtrip():
     restored = ModuleRuntime.from_dict(runtime.to_dict())
     assert restored.current_node_id == "node-cellar"
     assert restored.history[-1]["edge"] == "edge-cellar"
+
+
+def test_runtime_starts_at_declared_entry_and_preserves_saved_positions():
+    module = KeeperModule("入口顺序测试", "entry.pdf", [
+        ModuleScene("scene-ending", "结局", "结局", 1, 1, "结局内容。"),
+        ModuleScene("scene-entry", "入口", "入口", 2, 2, "入口内容。"),
+    ], story=StoryGraph(
+        entry_node_id="node-entry",
+        nodes=[
+            StoryNode("node-ending", "结局", "scene-ending", kind="ending"),
+            StoryNode("node-entry", "入口", "scene-entry", kind="entry"),
+        ],
+    ))
+    fresh = ModuleRuntime(module)
+    assert fresh.current_node_id == "node-entry"
+    assert fresh.current_index == 1
+    assert ModuleRuntime.from_dict(fresh.to_dict()).current_node_id == "node-entry"
+
+    legacy_save = {"module": module.to_dict(), "current_index": 0}
+    assert ModuleRuntime.from_dict(legacy_save).current_node_id == "node-ending"
+    legacy_save["current_index"] = 1
+    assert ModuleRuntime.from_dict(legacy_save).current_node_id == "node-entry"
+    assert ModuleRuntime.from_dict({"module": module.to_dict()}).current_node_id == "node-entry"

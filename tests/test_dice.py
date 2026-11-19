@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import random
 
+import pytest
+
 from coc_keeper.dice import (
     Difficulty, d100, degree_of_success, difficulty_target,
     fifth, half, max_roll, roll_dice,
@@ -73,6 +75,22 @@ def test_d100_bonus_takes_lower_tens(scripted):
 def test_d100_penalty_takes_higher_tens(scripted):
     rng = scripted(5, 7, 2)  # units=5, 两个十位 7 与 2 -> 取较大 7
     assert d100(penalty_dice=1, rng=rng) == 75
+
+
+@pytest.mark.parametrize("bonus,penalty,digits,expected", [
+    (1, 0, (0, 0, 1), 10),
+    (1, 0, (0, 9, 0), 90),
+    (0, 1, (0, 0, 1), 100),
+    (0, 1, (0, 9, 0), 100),
+    (2, 0, (0, 0, 9, 2), 20),
+    (0, 2, (0, 9, 0, 2), 100),
+    (1, 0, (0, 0, 0), 100),
+    (0, 1, (0, 0, 0), 100),
+    (1, 1, (0, 0), 100),
+    (2, 1, (0, 0, 1), 10),
+])
+def test_d100_compares_complete_percentile_results(scripted, bonus, penalty, digits, expected):
+    assert d100(bonus, penalty, scripted(*digits)) == expected
 
 
 def test_degree_of_success_thresholds():

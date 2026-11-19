@@ -7,11 +7,12 @@ import random
 import tempfile
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,6 +32,7 @@ from .module_store import ModuleStore
 from .modules import KeeperModule, ModuleRuntime
 from .skills import get_skill_catalog
 from .web_jobs import JobManager
+from .turn_store import TurnStore
 from .occupations import (
     get_occupation, interest_point_budget, list_occupations,
 )
@@ -81,6 +83,7 @@ class GameCreateRequest(BaseModel):
 
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class AppContext:
@@ -91,6 +94,9 @@ class AppContext:
         self.games = GameStore(self.data_root / "campaigns")
         self.drafts: dict[str, list[CharacterSheet]] = {}
         self._locks: dict[str, threading.Lock] = {}
+        self._character_locks: dict[str, threading.RLock] = {}
+        self.turns = TurnStore(self.games, self.characters)
+        self.turns.recover()
         self.jobs = JobManager()
         self.module_jobs: dict[str, str] = {}
         self.module_service = ModuleApplicationService(
@@ -100,6 +106,9 @@ class AppContext:
     def lock(self, game_id: str) -> threading.Lock:
         self._locks.setdefault(game_id, threading.Lock())
         return self._locks[game_id]
+
+    def character_lock(self, character_id: str) -> threading.RLock:
+        return self._character_locks.setdefault(character_id, threading.RLock())
 
     @staticmethod
     def character_payload(record) -> dict[str, Any]:
@@ -142,41 +151,65 @@ class AppContext:
         return payload
 
 
-app = FastAPI(title="CoC Keeper", version="2.3.0")
+router = APIRouter()
 static_root = Path(__file__).resolve().parent / "web_static"
-app.mount("/assets", StaticFiles(directory=static_root), name="assets")
 
 
-def get_context() -> AppContext:
-    """按需创建默认上下文；测试可通过 create_app(context) 注入临时目录。"""
-    if not hasattr(app.state, "context"):
-        app.state.context = AppContext()
-    return app.state.context
+def get_context(request: Request) -> AppContext:
+    application = request.app
+    try:
+        with application.state.context_lock:
+            if application.state.context is None:
+                application.state.context = AppContext()
+            context = application.state.context
+        _recover_turns(context)
+    except (OSError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=503, detail="本地回合数据尚未恢复，请稍后重试") from exc
+    return context
+
+
+def _recover_turns(context: AppContext) -> None:
+    try:
+        context.turns.recover()
+    except (OSError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=503, detail="本地回合数据尚未恢复，请稍后重试") from exc
 
 
 def create_app(context: AppContext | None = None) -> FastAPI:
-    app.state.context = context or AppContext()
-    return app
+    @asynccontextmanager
+    async def lifespan(application):
+        try:
+            yield
+        finally:
+            if application.state.context is not None:
+                application.state.context.jobs.shutdown()
+
+    application = FastAPI(title="CoC Keeper", version="2.3.0", lifespan=lifespan)
+    application.state.context = context
+    application.state.context_lock = threading.RLock()
+    application.mount("/assets", StaticFiles(directory=static_root), name="assets")
+    application.add_exception_handler(FileNotFoundError, not_found_handler)
+    application.add_exception_handler(ValueError, value_error_handler)
+    application.include_router(router)
+    return application
 
 
-@app.exception_handler(FileNotFoundError)
 async def not_found_handler(_, exc: FileNotFoundError):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
-@app.exception_handler(ValueError)
 async def value_error_handler(_, exc: ValueError):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-@app.get("/")
+@router.get("/")
 def index():
     return FileResponse(static_root / "index.html", headers={"Cache-Control": "no-store"})
 
 
-@app.get("/api/status")
+@router.get("/api/status")
 def status():
     settings = Settings()
     return {
@@ -196,21 +229,21 @@ def status():
     }
 
 
-@app.get("/api/characters")
-def list_characters():
-    return [get_context().character_payload(record) for record in get_context().characters.list()]
+@router.get("/api/characters")
+def list_characters(context: AppContext = Depends(get_context)):
+    return [context.character_payload(record) for record in context.characters.list()]
 
 
-@app.get("/api/occupations")
+@router.get("/api/occupations")
 def occupations():
     return [occupation.to_dict() for occupation in list_occupations()]
 
 
-@app.post("/api/character-drafts")
-def create_character_draft(request: DraftRequest):
+@router.post("/api/character-drafts")
+def create_character_draft(request: DraftRequest, context: AppContext = Depends(get_context)):
     draft_id = uuid.uuid4().hex
     candidates = generate_character_candidates(request.name.strip(), request.age, count=5, rng=random.Random())
-    get_context().drafts[draft_id] = candidates
+    context.drafts[draft_id] = candidates
     return {
         "draft_id": draft_id,
         "candidates": [
@@ -224,9 +257,9 @@ def create_character_draft(request: DraftRequest):
     }
 
 
-@app.post("/api/characters")
-def save_character(request: CharacterCreateRequest):
-    candidates = get_context().drafts.get(request.draft_id)
+@router.post("/api/characters")
+def save_character(request: CharacterCreateRequest, context: AppContext = Depends(get_context)):
+    candidates = context.drafts.get(request.draft_id)
     if candidates is None:
         raise HTTPException(status_code=404, detail="建卡候选已过期，请重新生成")
     sheet = CharacterSheet.from_dict(candidates[request.candidate_index].to_dict())
@@ -234,44 +267,48 @@ def save_character(request: CharacterCreateRequest):
         sheet, request.occupation_id, request.occupation_skills,
         request.occupation_points, request.interest_points,
     )
-    record = get_context().characters.create(sheet)
-    get_context().drafts.pop(request.draft_id, None)
-    return get_context().character_payload(record)
+    record = context.characters.create(sheet)
+    context.drafts.pop(request.draft_id, None)
+    return context.character_payload(record)
 
 
-@app.put("/api/characters/{character_id}/skills")
-def update_character_skills(character_id: str, request: SkillUpdateRequest):
-    record = get_context().characters.get(character_id)
-    if record.sheet.occupation_id is None:
-        if request.skills is None:
-            raise HTTPException(status_code=400, detail="旧版角色卡需要提交 skills 字段")
-        allocate_skill_points(record.sheet, request.skills)
-    else:
-        allocate_occupation_points(
-            record.sheet, record.sheet.occupation_id,
-            request.occupation_skills or record.sheet.occupation_skills,
-            request.occupation_points, request.interest_points,
-            occupation_skill_cap=record.sheet.occupation_skill_cap,
-            non_occupation_skill_cap=record.sheet.non_occupation_skill_cap,
-        )
-    return get_context().character_payload(get_context().characters.save(character_id, record.sheet))
+@router.put("/api/characters/{character_id}/skills")
+def update_character_skills(character_id: str, request: SkillUpdateRequest, context: AppContext = Depends(get_context)):
+    with context.character_lock(character_id):
+        _recover_turns(context)
+        record = context.characters.get(character_id)
+        if record.sheet.occupation_id is None:
+            if request.skills is None:
+                raise HTTPException(status_code=400, detail="旧版角色卡需要提交 skills 字段")
+            allocate_skill_points(record.sheet, request.skills)
+        else:
+            allocate_occupation_points(
+                record.sheet, record.sheet.occupation_id,
+                request.occupation_skills or record.sheet.occupation_skills,
+                request.occupation_points, request.interest_points,
+                occupation_skill_cap=record.sheet.occupation_skill_cap,
+                non_occupation_skill_cap=record.sheet.non_occupation_skill_cap,
+            )
+        return context.character_payload(context.characters.save(character_id, record.sheet))
 
 
-@app.delete("/api/characters/{character_id}")
-def delete_character(character_id: str):
-    record = get_context().characters.get(character_id)
-    games = get_context().referencing_games(character_id=character_id)
-    if games:
-        titles = "、".join(game.title for game in games[:3])
-        suffix = "等" if len(games) > 3 else ""
-        raise HTTPException(status_code=409, detail=f"角色卡正被战役「{titles}」{suffix}使用，请先删除这些战役")
-    get_context().characters.delete(character_id)
-    return {"id": record.id, "name": record.sheet.name, "deleted": True}
+@router.delete("/api/characters/{character_id}")
+def delete_character(character_id: str, context: AppContext = Depends(get_context)):
+    with context.character_lock(character_id):
+        _recover_turns(context)
+        record = context.characters.get(character_id)
+        games = context.referencing_games(character_id=character_id)
+        if games:
+            titles = "、".join(game.title for game in games[:3])
+            suffix = "等" if len(games) > 3 else ""
+            raise HTTPException(status_code=409, detail=f"角色卡正被战役「{titles}」{suffix}使用，请先删除这些战役")
+        context.characters.delete(character_id)
+        return {"id": record.id, "name": record.sheet.name, "deleted": True}
 
 
-@app.get("/api/character-drafts/{draft_id}/candidates/{candidate_index}/occupations/{occupation_id}")
-def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
-    candidates = get_context().drafts.get(draft_id)
+@router.get("/api/character-drafts/{draft_id}/candidates/{candidate_index}/occupations/{occupation_id}")
+def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int, context: AppContext = Depends(get_context)):
+    candidates = context.drafts.get(draft_id)
     if candidates is None:
         raise HTTPException(status_code=404, detail="建卡候选已过期，请重新生成")
     if not 0 <= candidate_index < len(candidates):
@@ -284,9 +321,10 @@ def occupation_preview(draft_id: str, candidate_index: int, occupation_id: int):
     return payload
 
 
-@app.get("/api/skills")
+@router.get("/api/skills")
 def list_skills(q: str | None = None, category: str | None = None, limit: int = 50):
     catalog = get_skill_catalog()
+    category = category.strip() or None if category is not None else None
     limit = max(1, min(int(limit), 200))
     if q and q.strip():
         hits = catalog.search(q, category=category, limit=limit)
@@ -303,12 +341,12 @@ def list_skills(q: str | None = None, category: str | None = None, limit: int = 
     }
 
 
-@app.get("/api/skills/detail")
+@router.get("/api/skills/detail")
 def skill_detail_query(name: str):
     return _skill_detail(name)
 
 
-@app.get("/api/skills/{name:path}")
+@router.get("/api/skills/{name:path}")
 def skill_detail(name: str):
     return _skill_detail(name)
 
@@ -320,30 +358,29 @@ def _skill_detail(name: str):
     return card.to_dict(detail=True)
 
 
-@app.get("/api/modules")
-def list_modules():
-    return [get_context().module_payload(record) for record in get_context().modules.list()]
+@router.get("/api/modules")
+def list_modules(context: AppContext = Depends(get_context)):
+    return [context.module_payload(record) for record in context.modules.list()]
 
 
-@app.get("/api/modules/{module_id}")
-def get_module(module_id: str):
-    return get_context().module_detail_payload(get_context().modules.get(module_id))
+@router.get("/api/modules/{module_id}")
+def get_module(module_id: str, context: AppContext = Depends(get_context)):
+    return context.module_detail_payload(context.modules.get(module_id))
 
 
-@app.put("/api/modules/{module_id}")
-def update_module(module_id: str, request: ModuleUpdateRequest):
+@router.put("/api/modules/{module_id}")
+def update_module(module_id: str, request: ModuleUpdateRequest, context: AppContext = Depends(get_context)):
     if not request.title.strip():
         raise HTTPException(status_code=400, detail="模组名称不能为空")
     module = KeeperModule.from_dict({
         **request.model_dump(), "title": request.title.strip(),
         "source_name": request.source_name.strip(), "version": 2,
     })
-    return get_context().module_detail_payload(get_context().modules.save(module_id, module))
+    return context.module_detail_payload(context.modules.save(module_id, module))
 
 
-@app.post("/api/modules/{module_id}/analyze", status_code=202)
-def analyze_module(module_id: str, reparse: bool = False, review: bool = True):
-    context = get_context()
+@router.post("/api/modules/{module_id}/analyze", status_code=202)
+def analyze_module(module_id: str, reparse: bool = False, review: bool = True, context: AppContext = Depends(get_context)):
     settings = Settings()
     if not settings.is_configured:
         raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API，无法重新分析模组")
@@ -368,9 +405,8 @@ def analyze_module(module_id: str, reparse: bool = False, review: bool = True):
     return payload
 
 
-@app.get("/api/modules/{module_id}/analysis")
-def module_analysis_status(module_id: str):
-    context = get_context()
+@router.get("/api/modules/{module_id}/analysis")
+def module_analysis_status(module_id: str, context: AppContext = Depends(get_context)):
     record = context.modules.get(module_id)
     job_id = context.module_jobs.get(module_id)
     if job_id:
@@ -386,26 +422,25 @@ def module_analysis_status(module_id: str):
     }
 
 
-@app.get("/api/imports/{job_id}")
-def import_status(job_id: str):
-    return get_context().jobs.get(job_id)
+@router.get("/api/imports/{job_id}")
+def import_status(job_id: str, context: AppContext = Depends(get_context)):
+    return context.jobs.get(job_id)
 
 
-@app.delete("/api/modules/{module_id}")
-def delete_module(module_id: str):
-    record = get_context().modules.get(module_id)
-    games = get_context().referencing_games(module_id=module_id)
+@router.delete("/api/modules/{module_id}")
+def delete_module(module_id: str, context: AppContext = Depends(get_context)):
+    record = context.modules.get(module_id)
+    games = context.referencing_games(module_id=module_id)
     if games:
         titles = "、".join(game.title for game in games[:3])
         suffix = "等" if len(games) > 3 else ""
         raise HTTPException(status_code=409, detail=f"模组正被战役「{titles}」{suffix}使用，请先删除这些战役")
-    get_context().modules.delete(module_id)
+    context.modules.delete(module_id)
     return {"id": record.id, "title": record.module.title, "deleted": True}
 
 
-@app.post("/api/modules/path", status_code=202)
-def import_module_path(request: ModulePathRequest):
-    context = get_context()
+@router.post("/api/modules/path", status_code=202)
+def import_module_path(request: ModulePathRequest, context: AppContext = Depends(get_context)):
     source = Path(request.path)
     if not source.exists():
         raise FileNotFoundError(source)
@@ -415,14 +450,13 @@ def import_module_path(request: ModulePathRequest):
     return payload
 
 
-@app.post("/api/modules/upload", status_code=202)
-async def upload_module(file: UploadFile = File(...), title: str | None = Form(default=None)):
+@router.post("/api/modules/upload", status_code=202)
+async def upload_module(file: UploadFile = File(...), title: str | None = Form(default=None), context: AppContext = Depends(get_context)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="请选择 PDF 模组")
     content = await file.read(64 * 1024 * 1024 + 1)
     if len(content) > 64 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="PDF 不能超过 64 MB")
-    context = get_context()
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=context.data_root) as temporary:
         temporary.write(content)
         temp_path = Path(temporary.name)
@@ -437,70 +471,88 @@ async def upload_module(file: UploadFile = File(...), title: str | None = Form(d
     return payload
 
 
-@app.get("/api/games")
-def list_games():
-    return [get_context().game_payload(record, include_transcript=False) for record in get_context().games.list()]
+@router.get("/api/games")
+def list_games(context: AppContext = Depends(get_context)):
+    return [context.game_payload(record, include_transcript=False) for record in context.games.list()]
 
 
-@app.post("/api/games")
-def create_game(request: GameCreateRequest):
-    character = get_context().characters.get(request.character_id)
-    module = get_context().modules.get(request.module_id)
-    if module.module.analysis.get("status") == "failed":
-        raise HTTPException(status_code=409, detail="模组解析失败，无法开始战役")
-    sheet = CharacterSheet.from_dict(character.sheet.to_dict())
-    session = Session(
-        investigator=sheet, module=ModuleRuntime(module.module),
-        character_id=character.id, module_id=module.id,
-    )
-    record = get_context().games.create(request.title, character.id, module.id, session)
-    return get_context().game_payload(record)
+@router.post("/api/games")
+def create_game(request: GameCreateRequest, context: AppContext = Depends(get_context)):
+    with context.character_lock(request.character_id):
+        _recover_turns(context)
+        character = context.characters.get(request.character_id)
+        module = context.modules.get(request.module_id)
+        if module.module.analysis.get("status") == "failed":
+            raise HTTPException(status_code=409, detail="模组解析失败，无法开始战役")
+        sheet = CharacterSheet.from_dict(character.sheet.to_dict())
+        session = Session(
+            investigator=sheet, module=ModuleRuntime(module.module),
+            character_id=character.id, module_id=module.id,
+        )
+        record = context.games.create(request.title, character.id, module.id, session)
+        return context.game_payload(record)
 
 
-@app.get("/api/games/{game_id}")
-def get_game(game_id: str):
-    return get_context().game_payload(get_context().games.get(game_id))
+@router.get("/api/games/{game_id}")
+def get_game(game_id: str, context: AppContext = Depends(get_context)):
+    return context.game_payload(context.games.get(game_id))
 
 
-@app.delete("/api/games/{game_id}")
-def delete_game(game_id: str):
-    with get_context().lock(game_id):
-        record = get_context().games.get(game_id)
-        get_context().games.delete(game_id)
+@router.delete("/api/games/{game_id}")
+def delete_game(game_id: str, context: AppContext = Depends(get_context)):
+    with context.lock(game_id):
+        _recover_turns(context)
+        record = context.games.get(game_id)
+        context.games.delete(game_id)
     return {"id": record.id, "title": record.title, "deleted": True}
 
 
-@app.post("/api/games/{game_id}/messages")
-def send_message(game_id: str, request: MessageRequest):
-    with get_context().lock(game_id):
-        record = get_context().games.get(game_id)
-        relevant = record.relevant_history(request.content)
-        prompt = KP_SYSTEM_PROMPT
-        if relevant:
-            prompt += "\n\n## 与当前行动相关的已发生战役记录\n" + "\n".join(f"- {item}" for item in relevant)
-        settings = Settings()
-        if not settings.is_configured:
-            raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API")
-        agent = KeeperAgent(record.session, settings, system_prompt=prompt)
-        agent.memory.restore(
-            record.memory,
-            require_reasoning_content=settings.requires_reasoning_content,
-        )
-        try:
-            reply = agent.respond(request.content)
-        except Exception as exc:  # noqa: BLE001 - 转换为前端可处理的网关错误
-            raise HTTPException(status_code=502, detail=f"模型调用失败: {type(exc).__name__}: {exc}") from exc
-        record.transcript.extend([
-            TranscriptEntry("user", request.content), TranscriptEntry("assistant", reply),
-        ])
-        record.memory = agent.memory.snapshot()
-        get_context().games.save(record)
-        get_context().characters.save(record.character_id, record.session.investigator)
-        return {
-            "reply": reply,
-            "game": get_context().game_payload(record),
-            "trace": agent.tracer.summary(),
+@router.post("/api/games/{game_id}/messages")
+def send_message(game_id: str, request: MessageRequest, context: AppContext = Depends(get_context)):
+    with context.lock(game_id):
+        record = context.games.get(game_id)
+        with context.character_lock(record.character_id):
+            _recover_turns(context)
+            return _respond(context.games.get(game_id), request, context)
+
+
+def _respond(record: GameRecord, request: MessageRequest, context: AppContext) -> dict:
+    cached = record.completed_requests.get(request.request_id) if request.request_id else None
+    if cached is not None:
+        if cached["content"] != request.content:
+            raise HTTPException(status_code=409, detail="同一个请求编号不能提交不同的行动")
+        return {"reply": cached["reply"], "game": context.game_payload(record), "trace": cached["trace"]}
+    character_before = context.turns.synchronize_character(record)
+    relevant = record.relevant_history(request.content)
+    prompt = KP_SYSTEM_PROMPT
+    if relevant:
+        prompt += "\n\n## 与当前行动相关的已发生战役记录\n" + "\n".join(f"- {item}" for item in relevant)
+    settings = Settings()
+    if not settings.is_configured:
+        raise HTTPException(status_code=503, detail="尚未配置 DeepSeek API")
+    agent = KeeperAgent(record.session, settings, system_prompt=prompt)
+    agent.memory.restore(record.memory, require_reasoning_content=settings.requires_reasoning_content)
+    try:
+        reply = agent.respond(request.content)
+    except Exception as exc:  # noqa: BLE001 - 转换为前端可处理的网关错误
+        raise HTTPException(status_code=502, detail=f"模型调用失败: {type(exc).__name__}: {exc}") from exc
+    record.transcript.extend([
+        TranscriptEntry("user", request.content), TranscriptEntry("assistant", reply),
+    ])
+    record.memory = agent.memory.snapshot()
+    trace = agent.tracer.summary()
+    if request.request_id:
+        record.completed_requests[request.request_id] = {
+            "content": request.content, "reply": reply, "trace": trace,
         }
+    try:
+        context.turns.commit(record, character_before)
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="回合保存未完成，请重试同一条消息") from exc
+    return {"reply": reply, "game": context.game_payload(record), "trace": trace}
+
+
+app = create_app()
 
 
 def main() -> None:

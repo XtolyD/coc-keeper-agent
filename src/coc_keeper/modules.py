@@ -464,7 +464,7 @@ class KeeperModule:
 @dataclass
 class ModuleRuntime:
     module: KeeperModule
-    current_index: int = 0
+    current_index: int | None = None
     completed: list[str] = field(default_factory=list)
     history: list[dict[str, Any]] = field(default_factory=list)
     current_node_id: str | None = None
@@ -473,8 +473,12 @@ class ModuleRuntime:
 
     def __post_init__(self) -> None:
         if not self.current_node_id:
-            index = max(0, min(int(self.current_index), len(self.module.story.nodes) - 1))
-            self.current_node_id = self.module.story.nodes[index].id
+            if self.current_index is None:
+                self.current_node_id = self.module.story.entry_node_id
+            else:
+                # Preserve the position of old saves that stored only an index.
+                index = max(0, min(int(self.current_index), len(self.module.story.nodes) - 1))
+                self.current_node_id = self.module.story.nodes[index].id
         self._sync_index()
 
     def _sync_index(self) -> None:
@@ -627,7 +631,8 @@ class ModuleRuntime:
     def from_dict(cls, data: dict[str, Any]) -> "ModuleRuntime":
         module = KeeperModule.from_dict(data["module"])
         current_node_id = data.get("current_node_id")
-        current_index = int(data.get("current_index", 0))
+        saved_index = data.get("current_index")
+        current_index = int(saved_index) if saved_index is not None else None
         return cls(
             module=module, current_index=current_index, completed=list(data.get("completed", [])),
             history=list(data.get("history", [])), current_node_id=str(current_node_id) if current_node_id else None,
